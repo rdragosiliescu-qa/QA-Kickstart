@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
+
 const INPUT_MODES = [
   { id: "single", label: "Single Story", desc: "One user story or ticket", placeholder: `As a user, I want to reset my password via email so that I can regain access if I forget my credentials.` },
   { id: "multiple", label: "Multiple Stories", desc: "Several stories at once", placeholder: `1. As a user, I want to log in with email and password...\n2. As a user, I want to reset my password...\n3. As an admin, I want to manage user accounts...` },
