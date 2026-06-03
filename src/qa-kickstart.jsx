@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -271,7 +271,13 @@ Each object must have:
 - "steps": array of step strings (for functional/edge/negative), null for bdd
 - "expected": expected result string (for functional/edge/negative), null for bdd
 - "scenario": Gherkin scenario string (only for bdd), null otherwise
-- "whyItMatters": 1-2 sentences written like a senior QA explaining to a junior why this test case is important, what risk it covers, and what happens if it fails in production
+- "whyItMatters": 1-2 sentences from a senior QA's perspective. Must name the SPECIFIC risk this test covers (e.g. data loss, account lockout, payment failure, security bypass) and describe a realistic production consequence if it fails — not generic statements like "ensures the feature works as expected"
+
+STEP QUALITY RULES:
+- Vary step granularity: some steps should be UI-action level ("Click the Submit button"), others data-state level ("with the email field containing 256 characters"). Do not use the same step structure repeatedly across test cases.
+- Each test case must test a meaningfully distinct scenario — do not repeat the same condition with different wording.
+
+ANTI-REPETITION: Every test case in this response must cover a different angle, boundary, or failure mode. If two cases feel similar, replace one with a scenario from a different category (data, state, permission, timing, concurrency).
 
 Return one flat array of all test cases.`;
 }
@@ -288,11 +294,17 @@ ${existingTests}
 Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
 
 The object must have:
-- "summary": one sentence overall assessment
+- "summary": one sentence overall assessment — be specific about the most critical uncovered area, not a generic "coverage could be improved"
 - "coverageScore": integer 0-100
 - "missing": array of objects with: "title", "reason", "steps" (array), "expected", "whyItMatters"
+  - "reason": name the SPECIFIC test technique or dimension that is absent — e.g. "No boundary value test for the 140-character limit", "No test for concurrent submission by the same user", "No coverage of the unauthenticated state reaching this endpoint". Never write "this scenario is not covered" without saying which scenario and why it matters.
+  - "whyItMatters": name the production risk — data corruption, security bypass, user lockout, revenue loss — not generic impact
 - "weak": array of objects with: "area", "reason"
-- "redundant": array of objects with: "tests" (array of titles), "reason"`;
+  - "reason": state what the existing test DOES cover and what it specifically FAILS to test — e.g. "Tests the happy path login but does not verify the session token is invalidated on logout, leaving a window for session hijacking"
+- "redundant": array of objects with: "tests" (array of titles), "reason"
+  - "reason": identify the exact overlapping conditions — e.g. "Both tests submit the form with a valid email; neither adds a distinct boundary or state variation"
+
+ANTI-REPETITION: Each missing test must cover a different gap dimension (boundary, state, permission, error, concurrency, data type). Do not list variations of the same missing scenario.`;
 }
 
 function buildRiskPrompt(description) {
@@ -306,20 +318,22 @@ ${description}
 Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
 
 The object must have:
-- "summary": 2-3 sentence overall risk assessment
+- "summary": 2-3 sentence overall risk assessment — name the top 2 risk areas specific to this feature, not a generic statement about software quality
 - "overallRisk": one of "Critical", "High", "Medium", "Low"
 - "risks": array of risk objects each with:
   - "id": sequential number starting at 1
   - "name": short risk name (max 6 words)
   - "category": one of "Functional", "Technical", "Performance", "Security", "Integration", "UX", "Data", "Edge Case"
-  - "description": 1-2 sentences describing the risk
+  - "description": 1-2 sentences describing the risk specific to this feature — reference the actual behaviour or component involved
   - "impact": "High", "Medium", or "Low"
-  - "impactReason": one sentence
+  - "impactReason": one sentence — name the concrete business or user consequence (e.g. "Users cannot complete checkout, directly causing revenue loss" not "this would negatively affect users")
   - "likelihood": "High", "Medium", or "Low"
-  - "likelihoodReason": one sentence
+  - "likelihoodReason": one sentence — reference something specific from the feature description that makes this likely or unlikely, not a generic observation
   - "score": "Critical", "High", "Medium", or "Low"
-  - "mitigation": array of 2-3 specific QA actions
+  - "mitigation": array of 2-3 QA actions — each must be a concrete test scenario tied to THIS risk, not a category label. Mix test design, environment setup, and monitoring. E.g. "Simulate a dropped DB connection mid-transaction and verify the order is not partially created" not "Add integration tests". Vary the type across mitigations.
   - "testPriority": integer 1-N (1 = test first)
+
+ANTI-REPETITION: Each risk must cover a distinct failure mode. Do not list two risks in the same category unless they are genuinely independent scenarios. If risks feel similar, merge them and add a different-category risk instead.
 
 Sort risks by testPriority ascending.`;
 }
@@ -337,7 +351,15 @@ The object must have:
 - "version": "1.0"
 - "sections": array of section objects each with "heading" and "content" (use \\n for line breaks)
 
-Include these sections: Overview, Scope, Objectives, Test Approach, Entry & Exit Criteria, Test Environment, Resources & Roles, Risks & Mitigations, Schedule, Deliverables`;
+Include these sections: Overview, Scope, Objectives, Test Approach, Entry & Exit Criteria, Test Environment, Resources & Roles, Risks & Mitigations, Schedule, Deliverables
+
+CONTENT RULES — every section must be grounded in the feature description provided:
+- "Scope": list what IS in scope and what IS explicitly out of scope based on the feature boundaries described — do not write generic scope statements
+- "Test Approach": name the specific test types relevant to this feature's complexity (e.g. if it involves real-time sync, mention concurrency and timing tests; if it involves payments, mention security and failure-state testing) — do not list every test type generically
+- "Risks & Mitigations": name risks specific to this feature with concrete mitigations — not "the feature may not work as expected"
+- "Entry & Exit Criteria": write criteria that are measurable and specific to this feature — e.g. "All API endpoints documented in the spec return correct status codes under load" not "all tests pass"
+
+Do not pad sections with generic QA boilerplate. Every sentence must add information specific to this feature.`;
 }
 
 function buildOnboardingPrompt(input) {
@@ -366,11 +388,11 @@ Include ONLY these sections:
 3. "Business Rules & Constraints" — validation rules, limits, permissions, data dependencies, or logic the feature enforces
 4. "What Can Go Wrong" — realistic failure modes, edge cases, and things that are easy to break based on the feature's complexity
 5. "High-Risk Areas" — the parts of this feature that deserve the most testing attention and why
-6. "Testing Notes" — practical tips specific to this feature: tricky states to set up, data requirements, known complexity`;
+6. "Testing Notes" — 4-6 specific, non-obvious testing challenges for THIS feature. Each note must name a concrete scenario or state that is hard to reproduce or set up, and explain how to approach it — e.g. "To test the weekly reset behaviour, you will need to mock the UTC clock or manually trigger the cron — waiting for Monday is not viable in most test environments." Avoid generic tips like "use equivalence partitioning" or "test on multiple browsers" unless they address a specific complexity in this feature.`;
 }
 
 function buildAutomationPrompt(input) {
-  return `You are an expert QA automation strategist. Analyse this feature or test list and produce a practical E2E automation plan.
+  return `You are an expert QA automation strategist. Analyse this feature or test list and produce a practical automation plan.
 
 Input:
 ${input}
@@ -378,17 +400,74 @@ ${input}
 Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
 
 The object must have:
-- "summary": 2-3 sentence overview of the automation opportunity
-- "automationScore": integer 0-100 (how suitable for automation)
+- "summary": 2-3 sentence overview of the automation opportunity — name the specific areas of this feature that are strongest candidates and the main reason(s) some parts should stay manual
+- "automationScore": integer 0-100 (how suitable for automation overall)
 - "automate": array of candidates TO automate, each with: "name", "reason", "level" (E2E/API/Unit/Integration), "approach", "priority" (High/Medium/Low)
+  - "reason": explain WHY this specific scenario is suitable for automation — reference its stability, frequency, or precision requirement
+  - "approach": describe the specific test scenario and what assertion makes it automatable — e.g. "Submit a score via the API, then query the leaderboard endpoint and assert the player rank updated correctly". Do not name frameworks here.
 - "avoid": array of candidates to KEEP MANUAL, each with: "name", "reason"
+  - "reason": explain the specific characteristic that makes automation fragile or low-value here — e.g. "Layout shifts during animation make assertion timing unreliable" or "Reward calculation logic changes weekly, making hardcoded expected values a maintenance burden"
 - "frameworkSuggestions": array of objects each with: "level", "tools" (array of tool names), "reason"
-- "recommendations": array of 3-5 strategy recommendation strings`;
+  - "reason": tie the tool recommendation to a specific challenge or characteristic of THIS feature — not a generic endorsement
+- "recommendations": array of 3-5 strategy decisions SPECIFIC to this feature's complexity. Each must start with a tradeoff or rationale, e.g. "Avoid E2E tests for real-time sync — WebSocket timing makes them flaky; cover sync logic at the API level instead." Generic best practices (Page Object Model, run in CI, manage test data separately) must not appear unless they address a specific challenge described in the input.
+
+ANTI-REPETITION: Each recommendation must address a distinct strategic decision. Do not rephrase the same advice in different words.`;
+}
+
+function buildJiraPrompt(description) {
+  return `You are an expert Jira administrator with deep experience designing advanced dashboards, saved filters, and automation for complex software projects.
+
+The user has described their project and what they want to track or achieve in Jira:
+
+${description}
+
+Your job is to design a tailored, non-generic Jira setup for THIS specific project. Everything you produce must be directly derived from what the user described — do not produce generic Jira advice that would apply to any project.
+
+Focus on:
+- Rich, meaningful dashboards that tell a story about the project's health at a glance
+- Advanced saved filters using complex JQL (multi-condition, use of functions like currentUser(), startOfWeek(), membersOf(), ORDER BY, sub-queries where relevant)
+- Automation rules that solve real problems described by the user
+- Avoid obvious or beginner-level suggestions
+
+STRICT OUTPUT LIMITS — do not exceed these or the response will be cut off:
+- Maximum 2 dashboards, each with maximum 3 gadgets
+- Maximum 3 saved filters
+- Maximum 3 automation rules
+- Maximum 3 board tips
+- Keep all text fields concise — 1-2 sentences max per field
+
+Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
+
+The object must have:
+- "summary": 2 sentences on what this setup is designed to solve for this specific project
+- "dashboards": array of MAX 2 dashboard objects, each with:
+  - "name": dashboard name
+  - "audience": who this dashboard is for (1 sentence)
+  - "purpose": what question this dashboard answers at a glance (1 sentence)
+  - "gadgets": array of MAX 3 gadget objects, each with:
+    - "name": exact gadget name as it appears in Jira
+    - "title": the title to give this gadget on the dashboard
+    - "filter": the JQL this gadget should use
+    - "config": key configuration tip (1 sentence)
+    - "insight": what this gadget reveals that is specific to this project (1 sentence) — not "shows issue status"
+- "filters": array of MAX 3 saved filter objects, each with:
+  - "name": filter name
+  - "jql": the full JQL query string
+  - "explanation": breakdown of what each clause does (2-3 sentences max)
+  - "purpose": what decision this filter supports (1 sentence)
+  - "category": one of "Bug Tracking", "Sprint Health", "Release Readiness", "Regression", "QA Metrics", "Custom"
+- "automation": array of MAX 3 automation rule objects, each with:
+  - "title": rule name
+  - "trigger": what triggers this rule (1 sentence)
+  - "conditions": conditions that must be true (1 sentence)
+  - "action": exactly what the rule does (1 sentence)
+  - "benefit": the specific workflow problem this solves for THIS project (1 sentence) — not "saves time"
+- "boardTips": array of MAX 3 tips — each must reference a specific Jira configuration that addresses a workflow problem derived from this project's description. E.g. "Add a 'Blocked Reason' select field and create a board swimlane filtered by it so blockers are visible before standup without needing a status change." Avoid generic advice like "use swimlanes" or "add labels".`;
 }
 
 // ─── API HELPER ───────────────────────────────────────────────────────────────
 
-async function callClaude(prompt, maxTokens = 4000) {
+async function callClaude(prompt, maxTokens = 4000, onProgress = null) {
   let res;
   try {
     res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -402,6 +481,7 @@ async function callClaude(prompt, maxTokens = 4000) {
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
         max_tokens: maxTokens,
+        stream: true,
         messages: [{ role: "user", content: prompt }],
       }),
     });
@@ -410,21 +490,11 @@ async function callClaude(prompt, maxTokens = 4000) {
     throw new Error("Network error — check your connection and try again.");
   }
 
-  if (res.status === 401) {
-    throw new Error("Invalid API key. Check your REACT_APP_ANTHROPIC_API_KEY.");
-  }
-  if (res.status === 403) {
-    throw new Error("API key doesn't have permission to access this resource.");
-  }
-  if (res.status === 404) {
-    throw new Error("API endpoint not found — the model name may be invalid.");
-  }
-  if (res.status === 429) {
-    throw new Error("Rate limit hit. Wait a moment and try again.");
-  }
-  if (res.status === 529 || res.status === 503) {
-    throw new Error("Anthropic API is overloaded right now. Try again in a few seconds.");
-  }
+  if (res.status === 401) throw new Error("Invalid API key. Check your REACT_APP_ANTHROPIC_API_KEY.");
+  if (res.status === 403) throw new Error("API key doesn't have permission to access this resource.");
+  if (res.status === 404) throw new Error("API endpoint not found — the model name may be invalid.");
+  if (res.status === 429) throw new Error("Rate limit hit. Wait a moment and try again.");
+  if (res.status === 529 || res.status === 503) throw new Error("Anthropic API is overloaded right now. Try again in a few seconds.");
   if (!res.ok) {
     let detail = "";
     try {
@@ -434,34 +504,265 @@ async function callClaude(prompt, maxTokens = 4000) {
     throw new Error(`API error${detail}`);
   }
 
-  const data = await res.json();
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let accumulated = "";
+  let chunkCount = 0;
 
-  if (data.stop_reason === "max_tokens") {
-    throw new Error("Response was cut off (too long). Try a shorter or more focused input.");
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split("\n");
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const data = line.slice(6).trim();
+      if (data === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
+          accumulated += parsed.delta.text;
+          chunkCount++;
+          if (onProgress && chunkCount % 8 === 0) {
+            onProgress(accumulated.length);
+          }
+        }
+        if (parsed.type === "message_delta" && parsed.delta?.stop_reason === "max_tokens") {
+          throw new Error("Response was cut off (too long). Try a shorter or more focused input.");
+        }
+      } catch (e) {
+        if (e.message.includes("cut off")) throw e;
+      }
+    }
   }
 
-  const text = data.content?.map((b) => b.text || "").join("") || "";
-  if (!text) {
-    throw new Error("Empty response from API. Please try again.");
-  }
+  if (!accumulated) throw new Error("Empty response from API. Please try again.");
 
   try {
-    return JSON.parse(text.replace(/```json|```/g, "").trim());
+    return JSON.parse(accumulated.replace(/```json|```/g, "").trim());
   } catch (parseErr) {
-    console.error("JSON parse error. Raw response:", text);
+    console.error("JSON parse error. Raw response:", accumulated);
     throw new Error("Couldn't parse the AI response. The output may have been malformed — try again.");
   }
 }
 
-// ─── SHARED UI ────────────────────────────────────────────────────────────────
+// ─── PERSISTENCE ─────────────────────────────────────────────────────────────
+
+function saveTab(tabId, data) {
+  try { localStorage.setItem(`qa_kickstart_${tabId}`, JSON.stringify(data)); } catch {}
+}
+function loadTab(tabId) {
+  try { const d = localStorage.getItem(`qa_kickstart_${tabId}`); return d ? JSON.parse(d) : null; } catch { return null; }
+}
+function clearTab(tabId) {
+  try { localStorage.removeItem(`qa_kickstart_${tabId}`); } catch {}
+}
+
+// ─── EXPORT HELPERS ───────────────────────────────────────────────────────────
+
+function downloadFile(filename, content, mime = "text/plain") {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportTestCasesCSV(testCases) {
+  const rows = [["#", "Type", "Group", "Title", "Steps", "Expected", "Scenario", "Why It Matters"]];
+  testCases.forEach((tc, i) => {
+    rows.push([
+      i + 1, tc.type, tc.group || "", tc.title,
+      (tc.steps || []).join(" | "),
+      tc.expected || "",
+      tc.scenario || "",
+      tc.whyItMatters || "",
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  downloadFile("test-cases.csv", csv, "text/csv");
+}
+
+function exportTestCasesJSON(testCases) {
+  downloadFile("test-cases.json", JSON.stringify(testCases, null, 2), "application/json");
+}
+
+function exportTestCasesMD(testCases) {
+  const lines = ["# Generated Test Cases\n"];
+  testCases.forEach((tc, i) => {
+    lines.push(`## #${i + 1} [${tc.type.toUpperCase()}] ${tc.title}`);
+    if (tc.group) lines.push(`**Group:** ${tc.group}\n`);
+    if (tc.steps?.length) {
+      lines.push("**Steps:**");
+      tc.steps.forEach((s, j) => lines.push(`${j + 1}. ${s}`));
+    }
+    if (tc.expected) lines.push(`\n**Expected:** ${tc.expected}`);
+    if (tc.scenario) lines.push(`\`\`\`gherkin\n${tc.scenario}\n\`\`\``);
+    if (tc.whyItMatters) lines.push(`\n> 💡 ${tc.whyItMatters}`);
+    lines.push("");
+  });
+  downloadFile("test-cases.md", lines.join("\n"), "text/markdown");
+}
+
+function exportDocMD(title, sections) {
+  const lines = [`# ${title}\n`];
+  (sections || []).forEach(s => {
+    lines.push(`## ${s.heading}\n`);
+    lines.push(s.content);
+    lines.push("");
+  });
+  downloadFile(`${title.toLowerCase().replace(/\s+/g, "-")}.md`, lines.join("\n"), "text/markdown");
+}
+
+// ─── EXPORT TOOLBAR ───────────────────────────────────────────────────────────
+
+function ExportToolbar({ onCopy, onCSV, onJSON, onMD, copied }) {
+  const btnStyle = (active) => ({
+    background: active ? "#f0fdf4" : "#ffffff",
+    border: `1px solid ${active ? "#86efac" : "#dde1e7"}`,
+    borderRadius: "6px",
+    padding: "5px 11px",
+    color: active ? "#166534" : "#64748b",
+    fontSize: "12px",
+    fontWeight: "600",
+    cursor: "pointer",
+    transition: "all 0.15s",
+  });
+  return (
+    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+      <button onClick={onCopy} style={btnStyle(copied)}>{copied ? "✓ Copied!" : "Copy"}</button>
+      {onCSV  && <button onClick={onCSV}  style={btnStyle(false)}>⬇ CSV</button>}
+      {onJSON && <button onClick={onJSON} style={btnStyle(false)}>⬇ JSON</button>}
+      {onMD   && <button onClick={onMD}   style={btnStyle(false)}>⬇ Markdown</button>}
+    </div>
+  );
+}
+
+// ─── SHARED UI ───────────────────────────────────────────────────────────────
+
+const LOADING_STEPS = {
+  generator: [
+    { at: 0,   icon: "🔍", text: "Reading your story..." },
+    { at: 15,  icon: "🧠", text: "Mapping test scenarios..." },
+    { at: 40,  icon: "✍️",  text: "Writing test cases..." },
+    { at: 70,  icon: "💡", text: "Adding why-it-matters context..." },
+    { at: 90,  icon: "✅", text: "Wrapping up..." },
+  ],
+  gap: [
+    { at: 0,   icon: "🔍", text: "Reviewing existing coverage..." },
+    { at: 20,  icon: "🧠", text: "Identifying uncovered scenarios..." },
+    { at: 50,  icon: "⚠️",  text: "Flagging weak and redundant tests..." },
+    { at: 80,  icon: "📊", text: "Scoring overall coverage..." },
+    { at: 90,  icon: "✅", text: "Finalising analysis..." },
+  ],
+  risk: [
+    { at: 0,   icon: "🔍", text: "Scanning feature for risk areas..." },
+    { at: 20,  icon: "⚡", text: "Assessing functional risks..." },
+    { at: 40,  icon: "🔒", text: "Checking security & data risks..." },
+    { at: 65,  icon: "📐", text: "Scoring impact and likelihood..." },
+    { at: 85,  icon: "🛡️",  text: "Building mitigation actions..." },
+  ],
+  docs: [
+    { at: 0,   icon: "📄", text: "Analysing feature structure..." },
+    { at: 25,  icon: "✍️",  text: "Drafting document sections..." },
+    { at: 60,  icon: "🔎", text: "Adding feature-specific detail..." },
+    { at: 85,  icon: "✅", text: "Finalising document..." },
+  ],
+  jira: [
+    { at: 0,   icon: "🔍", text: "Understanding your project..." },
+    { at: 20,  icon: "📊", text: "Designing dashboards..." },
+    { at: 45,  icon: "🔎", text: "Building JQL filters..." },
+    { at: 65,  icon: "⚡", text: "Creating automation rules..." },
+    { at: 85,  icon: "🗂️",  text: "Adding board tips..." },
+  ],
+};
+
+function LoadingPanel({ tab, bytesReceived }) {
+  const steps = LOADING_STEPS[tab] || LOADING_STEPS.generator;
+  // Estimate progress: most responses are 3000–6000 chars of JSON
+  const estimatedTotal = 5000;
+  const pct = Math.min(95, Math.round((bytesReceived / estimatedTotal) * 100));
+
+  // Find the furthest step whose threshold we've passed
+  let activeStep = steps[0];
+  for (const step of steps) {
+    if (pct >= step.at) activeStep = step;
+  }
+
+  return (
+    <div style={{
+      marginTop: "28px",
+      background: "#ffffff",
+      border: "1px solid #e4e7ec",
+      borderRadius: "12px",
+      padding: "28px 24px",
+      textAlign: "center",
+    }}>
+      {/* Animated icon */}
+      <div style={{
+        fontSize: "32px",
+        marginBottom: "12px",
+        display: "inline-block",
+        animation: "pulse 1.4s ease-in-out infinite",
+      }}>
+        {activeStep.icon}
+      </div>
+
+      {/* Status text */}
+      <p style={{ fontSize: "14px", fontWeight: "600", color: "#1e293b", margin: "0 0 20px" }}>
+        {activeStep.text}
+      </p>
+
+      {/* Progress bar */}
+      <div style={{
+        background: "#f4f6f8",
+        borderRadius: "999px",
+        height: "6px",
+        overflow: "hidden",
+        marginBottom: "16px",
+      }}>
+        <div style={{
+          height: "100%",
+          width: `${pct}%`,
+          background: "linear-gradient(90deg, #1d6ab5, #3b82f6)",
+          borderRadius: "999px",
+          transition: "width 0.4s ease",
+        }} />
+      </div>
+
+      {/* Step dots */}
+      <div style={{ display: "flex", justifyContent: "center", gap: "6px" }}>
+        {steps.map((step, i) => {
+          const done = pct >= step.at;
+          const active = step === activeStep;
+          return (
+            <div key={i} style={{
+              width: active ? "20px" : "6px",
+              height: "6px",
+              borderRadius: "999px",
+              background: done ? "#1d6ab5" : "#e2e8f0",
+              transition: "all 0.3s ease",
+            }} />
+          );
+        })}
+      </div>
+
+      <p style={{ fontSize: "11px", color: "#94a3b8", margin: "14px 0 0" }}>
+        Streaming response — results will appear shortly
+      </p>
+    </div>
+  );
+}
 
 function SectionLabel({ children }) {
   return (
     <p
       style={{
-        fontSize: "12px",
+        fontSize: "13px",
         fontWeight: "600",
-        color: "#64748b",
+        color: "#475569",
         textTransform: "uppercase",
         letterSpacing: "0.06em",
         marginBottom: "10px",
@@ -481,7 +782,7 @@ function GenerateButton({ onClick, disabled, loading, label, loadingLabel }) {
         width: "100%",
         padding: "13px",
         borderRadius: "8px",
-        background: disabled ? "#e2e8f0" : "#185fa5",
+        background: disabled ? "#eaecef" : "#1558a0",
         border: "none",
         color: disabled ? "#94a3b8" : "#ffffff",
         fontSize: "14px",
@@ -572,8 +873,8 @@ function WhyItMatters({ text }) {
       style={{
         marginTop: "10px",
         background: "#f8fafc",
-        border: "1px solid #e2e8f0",
-        borderLeft: "3px solid #185fa5",
+        border: "1px solid #e4e7ec",
+        borderLeft: "3px solid #1558a0",
         borderRadius: "6px",
         padding: "8px 12px",
       }}
@@ -701,71 +1002,112 @@ function StepsExpanded({ tc }) {
   );
 }
 
-function TestCaseCard({ tc, index }) {
+function TestCaseCard({ tc, index, onUpdate }) {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null);
   const badge = BADGE_COLORS[tc.type] || BADGE_COLORS.functional;
+
+  const startEdit = (e) => {
+    e.stopPropagation();
+    setDraft({ ...tc, steps: [...(tc.steps || [])] });
+    setEditing(true);
+    setOpen(true);
+  };
+  const cancelEdit = (e) => { e.stopPropagation(); setEditing(false); setDraft(null); };
+  const saveEdit = (e) => {
+    e.stopPropagation();
+    onUpdate && onUpdate(index, draft);
+    setEditing(false);
+    setDraft(null);
+  };
+  const updateStep = (i, val) => setDraft(d => { const s = [...d.steps]; s[i] = val; return { ...d, steps: s }; });
+  const addStep = () => setDraft(d => ({ ...d, steps: [...(d.steps || []), ""] }));
+  const removeStep = (i) => setDraft(d => { const s = d.steps.filter((_, j) => j !== i); return { ...d, steps: s }; });
+
+  const textareaStyle = {
+    width: "100%", fontSize: "13px", lineHeight: "1.6", padding: "6px 8px",
+    border: "1px solid #c8d0da", borderRadius: "6px", outline: "none",
+    fontFamily: "inherit", resize: "vertical", boxSizing: "border-box", color: "#1e293b",
+  };
+
   return (
     <div
-      onClick={() => setOpen(!open)}
+      onClick={() => !editing && setOpen(!open)}
       style={{
         background: open ? "#f8fafc" : "#ffffff",
-        border: `1px solid ${open ? "#cbd5e1" : "#e2e8f0"}`,
-        borderRadius: "8px",
-        padding: "12px 14px",
-        cursor: "pointer",
-        transition: "all 0.15s",
-        marginBottom: "8px",
+        border: `1px solid ${editing ? "#1558a0" : open ? "#c8d0da" : "#e4e7ec"}`,
+        borderRadius: "8px", padding: "12px 14px",
+        cursor: editing ? "default" : "pointer",
+        transition: "all 0.15s", marginBottom: "8px",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-        <span
-          style={{
-            color: "#94a3b8",
-            fontFamily: "monospace",
-            fontSize: "11px",
-            minWidth: "24px",
-          }}
-        >
+        <span style={{ color: "#94a3b8", fontFamily: "monospace", fontSize: "11px", minWidth: "24px" }}>
           #{String(index + 1).padStart(2, "0")}
         </span>
-        <span
-          style={{
-            fontSize: "10px",
-            fontWeight: "600",
-            padding: "2px 7px",
-            borderRadius: "4px",
-            background: badge.bg,
-            color: badge.color,
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            whiteSpace: "nowrap",
-          }}
-        >
+        <span style={{ fontSize: "10px", fontWeight: "600", padding: "2px 7px", borderRadius: "4px", background: badge.bg, color: badge.color, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
           {tc.type}
         </span>
-        <span
-          style={{
-            color: "#1e293b",
-            fontSize: "13px",
-            flex: 1,
-            fontWeight: "500",
-          }}
-        >
-          {tc.title}
-        </span>
-        <span style={{ color: "#94a3b8", fontSize: "11px" }}>
-          {open ? "▲" : "▼"}
-        </span>
+        {editing ? (
+          <input
+            value={draft.title}
+            onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+            onClick={e => e.stopPropagation()}
+            style={{ ...textareaStyle, flex: 1, padding: "4px 8px", resize: "none" }}
+          />
+        ) : (
+          <span style={{ color: "#1e293b", fontSize: "13px", flex: 1, fontWeight: "500" }}>{tc.title}</span>
+        )}
+        {!editing && (
+          <button onClick={startEdit} style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", color: "#94a3b8", fontSize: "13px", lineHeight: 1 }} title="Edit">✏️</button>
+        )}
+        {editing ? (
+          <div style={{ display: "flex", gap: "6px" }} onClick={e => e.stopPropagation()}>
+            <button onClick={saveEdit} style={{ background: "#1558a0", border: "none", borderRadius: "5px", padding: "3px 10px", color: "#fff", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}>Save</button>
+            <button onClick={cancelEdit} style={{ background: "#f1f5f9", border: "1px solid #dde1e7", borderRadius: "5px", padding: "3px 10px", color: "#64748b", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}>Cancel</button>
+          </div>
+        ) : (
+          <span style={{ color: "#94a3b8", fontSize: "11px" }}>{open ? "▲" : "▼"}</span>
+        )}
       </div>
       {open && (
-        <div
-          style={{
-            marginTop: "12px",
-            paddingTop: "12px",
-            borderTop: "1px solid #e2e8f0",
-          }}
-        >
-          <StepsExpanded tc={tc} />
+        <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #e4e7ec" }} onClick={e => editing && e.stopPropagation()}>
+          {editing ? (
+            <div>
+              {draft.steps?.length > 0 && (
+                <div style={{ marginBottom: "12px" }}>
+                  <p style={{ color: "#94a3b8", fontSize: "11px", fontWeight: "600", letterSpacing: "0.08em", textTransform: "uppercase", margin: "0 0 8px" }}>Steps</p>
+                  {draft.steps.map((s, i) => (
+                    <div key={i} style={{ display: "flex", gap: "6px", marginBottom: "6px", alignItems: "flex-start" }}>
+                      <span style={{ color: "#94a3b8", fontSize: "12px", minWidth: "18px", fontFamily: "monospace", paddingTop: "7px" }}>{i + 1}.</span>
+                      <textarea value={s} onChange={e => updateStep(i, e.target.value)} rows={2} style={textareaStyle} />
+                      <button onClick={() => removeStep(i)} style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: "14px", paddingTop: "4px", flexShrink: 0 }}>✕</button>
+                    </div>
+                  ))}
+                  <button onClick={addStep} style={{ fontSize: "12px", color: "#1558a0", background: "none", border: "1px dashed #93c5fd", borderRadius: "5px", padding: "4px 10px", cursor: "pointer", marginTop: "2px" }}>+ Add step</button>
+                </div>
+              )}
+              {draft.expected !== undefined && draft.expected !== null && (
+                <div style={{ marginBottom: "10px" }}>
+                  <p style={{ color: "#94a3b8", fontSize: "11px", fontWeight: "600", letterSpacing: "0.08em", textTransform: "uppercase", margin: "0 0 6px" }}>Expected Result</p>
+                  <textarea value={draft.expected || ""} onChange={e => setDraft(d => ({ ...d, expected: e.target.value }))} rows={2} style={textareaStyle} />
+                </div>
+              )}
+              {draft.scenario !== undefined && draft.scenario !== null && (
+                <div style={{ marginBottom: "10px" }}>
+                  <p style={{ color: "#94a3b8", fontSize: "11px", fontWeight: "600", letterSpacing: "0.08em", textTransform: "uppercase", margin: "0 0 6px" }}>Gherkin Scenario</p>
+                  <textarea value={draft.scenario || ""} onChange={e => setDraft(d => ({ ...d, scenario: e.target.value }))} rows={5} style={{ ...textareaStyle, fontFamily: "monospace", fontSize: "12px" }} />
+                </div>
+              )}
+              <div style={{ marginBottom: "6px" }}>
+                <p style={{ color: "#94a3b8", fontSize: "11px", fontWeight: "600", letterSpacing: "0.08em", textTransform: "uppercase", margin: "0 0 6px" }}>Why It Matters</p>
+                <textarea value={draft.whyItMatters || ""} onChange={e => setDraft(d => ({ ...d, whyItMatters: e.target.value }))} rows={2} style={textareaStyle} />
+              </div>
+            </div>
+          ) : (
+            <StepsExpanded tc={tc} />
+          )}
         </div>
       )}
     </div>
@@ -779,7 +1121,7 @@ function MissingTestCard({ tc, index }) {
       onClick={() => setOpen(!open)}
       style={{
         background: open ? "#fffbeb" : "#ffffff",
-        border: `1px solid ${open ? "#fcd34d" : "#e2e8f0"}`,
+        border: `1px solid ${open ? "#fcd34d" : "#e4e7ec"}`,
         borderRadius: "8px",
         padding: "12px 14px",
         cursor: "pointer",
@@ -865,7 +1207,7 @@ function RiskMatrix({ risks }) {
       <div
         style={{
           background: "#ffffff",
-          border: "1px solid #e2e8f0",
+          border: "1px solid #e4e7ec",
           borderRadius: "10px",
           padding: "20px",
           overflowX: "auto",
@@ -1051,7 +1393,7 @@ function RiskCard({ risk }) {
             fontWeight: "600",
             padding: "2px 7px",
             borderRadius: "4px",
-            background: "#f1f5f9",
+            background: "#f4f6f8",
             color: catColor,
             textTransform: "uppercase",
             letterSpacing: "0.04em",
@@ -1084,7 +1426,7 @@ function RiskCard({ risk }) {
           style={{
             marginTop: "14px",
             paddingTop: "14px",
-            borderTop: "1px solid #e2e8f0",
+            borderTop: "1px solid #e4e7ec",
           }}
         >
           <p
@@ -1249,7 +1591,7 @@ function DocSection({ heading, content }) {
           color: "#0f172a",
           margin: "0 0 10px",
           paddingBottom: "8px",
-          borderBottom: "1px solid #e2e8f0",
+          borderBottom: "1px solid #e4e7ec",
         }}
       >
         {heading}
@@ -1374,18 +1716,60 @@ function AutomationCard({ item, type }) {
 
 // ─── GENERATOR TAB ────────────────────────────────────────────────────────────
 
-function GeneratorTab() {
+function GeneratorTab({ onResults }) {
   const [inputMode, setInputMode] = useState("single");
   const [input, setInput] = useState("");
   const [selectedTypes, setSelectedTypes] = useState([]);
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [bytesReceived, setBytesReceived] = useState(0);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
   const resultsRef = useRef(null);
 
-  const canGenerate =
-    input.trim().length > 0 && selectedTypes.length > 0 && !loading;
+  const onResultsRef = useRef(onResults);
+
+  // Load persisted state on mount
+  useEffect(() => {
+    const saved = loadTab("generator");
+    if (saved) {
+      if (saved.input) setInput(saved.input);
+      if (saved.selectedTypes) setSelectedTypes(saved.selectedTypes);
+      if (saved.inputMode) setInputMode(saved.inputMode);
+      if (saved.results) {
+        setResults(saved.results);
+        onResultsRef.current && onResultsRef.current(saved.results.length);
+      }
+    }
+  }, []);
+
+  // Persist input fields on change
+  useEffect(() => {
+    const saved = loadTab("generator") || {};
+    saveTab("generator", { ...saved, input, inputMode, selectedTypes });
+  }, [input, inputMode, selectedTypes]);
+
+  const updateTestCase = (index, updated) => {
+    const flat = results.map((tc, i) => i === index ? updated : tc);
+    setResults(flat);
+    saveTab("generator", { results: flat, selectedTypes, inputMode });
+  };
+
+  const wordCount = input.trim() ? input.trim().split(/\s+/).length : 0;
+  const wordCountColor = wordCount === 0 ? "#94a3b8" : wordCount >= 30 ? "#166534" : "#92400e";
+
+  const missingText = input.trim().length === 0;
+  const missingType = selectedTypes.length === 0;
+  const canGenerate = !missingText && !missingType && !loading;
+
+  const disabledHint = missingText && missingType
+    ? "Add a story and select at least one test type to continue"
+    : missingText
+    ? "Add a user story or feature description above"
+    : missingType
+    ? "Select at least one test type above"
+    : null;
+
   const toggleType = (id) =>
     setSelectedTypes((prev) =>
       prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
@@ -1394,15 +1778,15 @@ function GeneratorTab() {
   const generate = async () => {
     if (!canGenerate) return;
     setLoading(true);
+    setBytesReceived(0);
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(buildGeneratorPrompt(inputMode, input, selectedTypes));
+      const parsed = await callClaude(buildGeneratorPrompt(inputMode, input, selectedTypes), 4000, (n) => setBytesReceived(n));
       setResults(parsed);
-      setTimeout(
-        () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
-        100,
-      );
+      saveTab("generator", { results: parsed, selectedTypes, inputMode });
+      onResults && onResults(parsed.length);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch (err) {
       console.error("Generator error:", err);
       setError(err.message);
@@ -1431,6 +1815,8 @@ function GeneratorTab() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const clearResults = () => { setResults(null); clearTab("generator"); onResults && onResults(0); };
+
   const grouped = results
     ? selectedTypes.reduce((acc, type) => {
         const tcs = results.filter((tc) => tc.type === type);
@@ -1449,28 +1835,26 @@ function GeneratorTab() {
 
   return (
     <div>
+      {/* Tab description */}
+      <div style={{ marginBottom: "22px" }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>Test Generator</h2>
+        <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>
+          Paste a user story or feature — get a complete, structured set of test cases instantly.
+        </p>
+      </div>
+
       <div style={{ marginBottom: "20px" }}>
-        <SectionLabel>Input Mode</SectionLabel>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: "10px",
-          }}
-        >
+        <SectionLabel>What are you testing?</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px" }}>
           {INPUT_MODES.map((m) => {
             const active = inputMode === m.id;
             return (
               <button
                 key={m.id}
-                onClick={() => {
-                  setInputMode(m.id);
-                  setInput("");
-                  setResults(null);
-                }}
+                onClick={() => { setInputMode(m.id); setInput(""); setResults(null); }}
                 style={{
                   background: active ? "#e6f1fb" : "#ffffff",
-                  border: `${active ? "2px" : "1px"} solid ${active ? "#185fa5" : "#e2e8f0"}`,
+                  border: `${active ? "2px" : "1px"} solid ${active ? "#185fa5" : "#dde1e7"}`,
                   borderRadius: "8px",
                   padding: "12px 14px",
                   cursor: "pointer",
@@ -1486,25 +1870,8 @@ function GeneratorTab() {
                   {MODE_ICONS[m.id](active ? "#185fa5" : "#94a3b8")}
                 </div>
                 <div>
-                  <div
-                    style={{
-                      fontSize: "13px",
-                      fontWeight: "600",
-                      color: active ? "#185fa5" : "#64748b",
-                      marginBottom: "2px",
-                    }}
-                  >
-                    {m.label}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "11px",
-                      color: active ? "#185fa5" : "#94a3b8",
-                      opacity: active ? 0.8 : 1,
-                    }}
-                  >
-                    {m.desc}
-                  </div>
+                  <div style={{ fontSize: "13px", fontWeight: "600", color: active ? "#185fa5" : "#64748b", marginBottom: "2px" }}>{m.label}</div>
+                  <div style={{ fontSize: "11px", color: active ? "#185fa5" : "#94a3b8", opacity: active ? 0.8 : 1 }}>{m.desc}</div>
                 </div>
               </button>
             );
@@ -1513,33 +1880,23 @@ function GeneratorTab() {
       </div>
 
       <div style={{ marginBottom: "20px" }}>
-        <label
-          style={{
-            fontSize: "12px",
-            fontWeight: "600",
-            color: "#64748b",
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-            display: "block",
-            marginBottom: "8px",
-          }}
-        >
-          {currentMode.label}
-        </label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "8px" }}>
+          <label style={{ fontSize: "13px", fontWeight: "600", color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em", display: "block" }}>
+            {currentMode.label}
+          </label>
+          <span style={{ fontSize: "11px", color: wordCountColor, fontWeight: wordCount >= 30 ? "600" : "400" }}>
+            {wordCount === 0 ? "0 words" : wordCount >= 30 ? `✓ ${wordCount} words` : `${wordCount} words — add more detail for better results`}
+          </span>
+        </div>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={currentMode.placeholder}
           style={{
             width: "100%",
-            minHeight:
-              inputMode === "epic"
-                ? "180px"
-                : inputMode === "multiple"
-                  ? "150px"
-                  : "110px",
+            minHeight: inputMode === "epic" ? "180px" : inputMode === "multiple" ? "150px" : "110px",
             background: "#ffffff",
-            border: "1px solid #e2e8f0",
+            border: "1px solid #e4e7ec",
             borderRadius: "8px",
             color: "#1e293b",
             fontSize: "13.5px",
@@ -1550,20 +1907,14 @@ function GeneratorTab() {
             fontFamily: "inherit",
             boxSizing: "border-box",
           }}
-          onFocus={(e) => (e.target.style.borderColor = "#185fa5")}
+          onFocus={(e) => (e.target.style.borderColor = "#1558a0")}
           onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
         />
       </div>
 
       <div style={{ marginBottom: "24px" }}>
         <SectionLabel>Test Types</SectionLabel>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
-            gap: "10px",
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px" }}>
           {TEST_TYPES.map((t) => {
             const active = selectedTypes.includes(t.id);
             return (
@@ -1581,28 +1932,9 @@ function GeneratorTab() {
                   outline: "none",
                 }}
               >
-                <div style={{ marginBottom: "6px" }}>
-                  {TYPE_ICONS[t.id](active ? t.activeColor.icon : "#94a3b8")}
-                </div>
-                <div
-                  style={{
-                    fontSize: "13px",
-                    fontWeight: "600",
-                    color: active ? t.activeColor.text : "#64748b",
-                    marginBottom: "2px",
-                  }}
-                >
-                  {t.label}
-                </div>
-                <div
-                  style={{
-                    fontSize: "11px",
-                    color: active ? t.activeColor.text : "#94a3b8",
-                    opacity: active ? 0.8 : 1,
-                  }}
-                >
-                  {t.desc}
-                </div>
+                <div style={{ marginBottom: "6px" }}>{TYPE_ICONS[t.id](active ? t.activeColor.icon : "#94a3b8")}</div>
+                <div style={{ fontSize: "13px", fontWeight: "600", color: active ? t.activeColor.text : "#64748b", marginBottom: "2px" }}>{t.label}</div>
+                <div style={{ fontSize: "11px", color: active ? t.activeColor.text : "#94a3b8", opacity: active ? 0.8 : 1 }}>{t.desc}</div>
               </button>
             );
           })}
@@ -1613,77 +1945,59 @@ function GeneratorTab() {
         onClick={generate}
         disabled={!canGenerate}
         loading={loading}
-        label={
-          inputMode === "epic"
-            ? "Generate Full Test Suite →"
-            : "Generate Test Cases →"
-        }
-        loadingLabel={
-          inputMode === "epic"
-            ? "Generating full test suite..."
-            : "Generating test cases..."
-        }
+        label={inputMode === "epic" ? "Generate Full Test Suite →" : "Generate Test Cases →"}
+        loadingLabel={inputMode === "epic" ? "Generating full test suite..." : "Generating test cases..."}
       />
-      {error && (
-        <p
-          style={{
-            color: "#dc2626",
-            fontSize: "13px",
-            textAlign: "center",
-            marginTop: "14px",
-          }}
-        >
-          {error}
+
+      {/* Disabled hint */}
+      {disabledHint && !loading && (
+        <p style={{ textAlign: "center", fontSize: "12px", color: "#94a3b8", margin: "8px 0 0" }}>
+          {disabledHint}
         </p>
+      )}
+
+      {error && <p style={{ color: "#dc2626", fontSize: "13px", textAlign: "center", marginTop: "14px" }}>{error}</p>}
+
+      {loading && <LoadingPanel tab="generator" bytesReceived={bytesReceived} />}
+
+      {/* Empty state */}
+      {!results && !loading && (
+        <div style={{ marginTop: "40px", textAlign: "center", padding: "32px 24px", border: "1px dashed #d0d5dd", borderRadius: "12px", background: "#fafbfc" }}>
+          <div style={{ fontSize: "28px", marginBottom: "12px" }}>✅</div>
+          <p style={{ margin: "0 0 8px", fontSize: "14px", fontWeight: "600", color: "#475569" }}>Your test cases will appear here</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "center", marginTop: "12px" }}>
+            {["Pick your story type above", "Paste your user story or epic", "Select functional, edge, negative or BDD types", "Hit Generate"].map((step, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#94a3b8" }}>
+                <span style={{ width: "18px", height: "18px", borderRadius: "50%", background: "#e4e7ec", fontSize: "10px", fontWeight: "700", color: "#64748b", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                {step}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {results && (
         <div ref={resultsRef} style={{ marginTop: "36px" }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: "20px",
-            }}
-          >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", flexWrap: "wrap", gap: "10px" }}>
             <div>
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "15px",
-                  fontWeight: "700",
-                  color: "#0f172a",
-                }}
-              >
+              <h2 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
                 {inputMode === "epic" ? "Test Suite" : "Generated Test Cases"}
               </h2>
-              <p
-                style={{
-                  margin: "2px 0 0",
-                  fontSize: "12px",
-                  color: "#94a3b8",
-                }}
-              >
-                {results.length} test cases · {selectedTypes.length} type
-                {selectedTypes.length > 1 ? "s" : ""}
+              <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#94a3b8" }}>
+                {results.length} test cases · {selectedTypes.length} type{selectedTypes.length > 1 ? "s" : ""}
+                <span style={{ marginLeft: "10px", color: "#c7d0dc", fontStyle: "italic" }}>· saved</span>
               </p>
             </div>
-            <button
-              onClick={copyAll}
-              style={{
-                background: copied ? "#f0fdf4" : "#ffffff",
-                border: `1px solid ${copied ? "#86efac" : "#e2e8f0"}`,
-                borderRadius: "6px",
-                padding: "6px 12px",
-                color: copied ? "#166534" : "#64748b",
-                fontSize: "12px",
-                fontWeight: "600",
-                cursor: "pointer",
-              }}
-            >
-              {copied ? "✓ Copied!" : "Copy All"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <ExportToolbar
+                copied={copied}
+                onCopy={copyAll}
+                onCSV={() => exportTestCasesCSV(results)}
+                onJSON={() => exportTestCasesJSON(results)}
+                onMD={() => exportTestCasesMD(results)}
+              />
+              <button onClick={clearResults} style={{ background: "none", border: "1px solid #fca5a5", borderRadius: "6px", padding: "5px 10px", color: "#dc2626", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>Clear</button>
+            </div>
           </div>
           {selectedTypes.map((type) => {
             const subGroups = grouped[type];
@@ -1700,7 +2014,7 @@ function GeneratorTab() {
                     gap: "8px",
                     marginBottom: "14px",
                     paddingBottom: "10px",
-                    borderBottom: "1px solid #e2e8f0",
+                    borderBottom: "1px solid #e4e7ec",
                   }}
                 >
                   {TYPE_ICONS[type](badge.color)}
@@ -1744,13 +2058,17 @@ function GeneratorTab() {
                         {groupName}
                       </p>
                     )}
-                    {tcs.map((tc, i) => (
-                      <TestCaseCard
-                        key={i}
-                        tc={tc}
-                        index={Object.values(subGroups).flat().indexOf(tc)}
-                      />
-                    ))}
+                    {tcs.map((tc, i) => {
+                      const globalIndex = Object.values(subGroups).flat().indexOf(tc);
+                      return (
+                        <TestCaseCard
+                          key={globalIndex}
+                          tc={tc}
+                          index={globalIndex}
+                          onUpdate={updateTestCase}
+                        />
+                      );
+                    })}
                   </div>
                 ))}
               </div>
@@ -1764,30 +2082,60 @@ function GeneratorTab() {
 
 // ─── GAP DETECTOR TAB ─────────────────────────────────────────────────────────
 
-function GapDetectorTab() {
+function GapDetectorTab({ onResults }) {
   const [feature, setFeature] = useState("");
   const [existingTests, setExistingTests] = useState("");
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [bytesReceived, setBytesReceived] = useState(0);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
   const resultsRef = useRef(null);
 
-  const canAnalyse =
-    feature.trim().length > 0 && existingTests.trim().length > 0 && !loading;
+  const onResultsRef = useRef(onResults);
+
+  useEffect(() => {
+    const saved = loadTab("gap");
+    if (saved) {
+      if (saved.feature) setFeature(saved.feature);
+      if (saved.existingTests) setExistingTests(saved.existingTests);
+      if (saved.results) {
+        setResults(saved.results);
+        onResultsRef.current && onResultsRef.current((saved.results.missing?.length || 0) + (saved.results.weak?.length || 0));
+      }
+    }
+  }, []);
+
+  // Persist input fields on change
+  useEffect(() => {
+    const saved = loadTab("gap") || {};
+    saveTab("gap", { ...saved, feature, existingTests });
+  }, [feature, existingTests]);
+
+  const featureWords = feature.trim() ? feature.trim().split(/\s+/).length : 0;
+  const testLines = existingTests.trim() ? existingTests.trim().split(/\n/).filter(l => l.trim()).length : 0;
+  const missingFeature = feature.trim().length === 0;
+  const missingTests = existingTests.trim().length === 0;
+  const canAnalyse = !missingFeature && !missingTests && !loading;
+
+  const disabledHint = missingFeature && missingTests
+    ? "Add a feature description and your existing test titles to continue"
+    : missingFeature ? "Add a feature description on the left"
+    : missingTests ? "Paste your existing test titles on the right"
+    : null;
 
   const analyse = async () => {
     if (!canAnalyse) return;
     setLoading(true);
+    setBytesReceived(0);
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(buildGapPrompt(feature, existingTests));
+      const parsed = await callClaude(buildGapPrompt(feature, existingTests), 4000, (n) => setBytesReceived(n));
       setResults(parsed);
-      setTimeout(
-        () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
-        100,
-      );
+      saveTab("gap", { results: parsed });
+      onResults && onResults((parsed.missing?.length || 0) + (parsed.weak?.length || 0));
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch (err) {
       console.error("Gap detector error:", err);
       setError(err.message);
@@ -1812,6 +2160,31 @@ function GapDetectorTab() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const clearResults = () => { setResults(null); clearTab("gap"); onResults && onResults(0); };
+
+  const exportGapMD = () => {
+    if (!results) return;
+    const lines = ["# Gap Analysis Report\n", `**Coverage Score:** ${results.coverageScore}%\n`, `${results.summary}\n`];
+    if (results.missing?.length) {
+      lines.push("## Missing Test Cases\n");
+      results.missing.forEach((tc, i) => {
+        lines.push(`### #${i+1} ${tc.title}`);
+        lines.push(`**Why missing:** ${tc.reason}\n`);
+        if (tc.steps?.length) { lines.push("**Steps:**"); tc.steps.forEach((s,j) => lines.push(`${j+1}. ${s}`)); }
+        if (tc.expected) lines.push(`\n**Expected:** ${tc.expected}\n`);
+      });
+    }
+    if (results.weak?.length) {
+      lines.push("## Weak Coverage\n");
+      results.weak.forEach(w => lines.push(`- **${w.area}**: ${w.reason}\n`));
+    }
+    if (results.redundant?.length) {
+      lines.push("## Redundant Tests\n");
+      results.redundant.forEach(r => lines.push(`- ${r.tests?.join(", ")}: ${r.reason}\n`));
+    }
+    downloadFile("gap-analysis.md", lines.join("\n"), "text/markdown");
+  };
+
   const scoreColor = results
     ? results.coverageScore >= 75
       ? "#166534"
@@ -1822,129 +2195,86 @@ function GapDetectorTab() {
 
   return (
     <div>
+      {/* Tab description */}
+      <div style={{ marginBottom: "22px" }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>Gap Detector</h2>
+        <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>
+          Paste your existing test titles and the feature spec — get a scored coverage report with missing, weak, and redundant tests.
+        </p>
+      </div>
+
       <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "16px",
-          marginBottom: "20px",
-        }}
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}
       >
         <div>
-          <label
-            style={{
-              fontSize: "12px",
-              fontWeight: "600",
-              color: "#64748b",
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              display: "block",
-              marginBottom: "8px",
-            }}
-          >
-            Feature / User Story
-          </label>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "8px" }}>
+            <label style={{ fontSize: "13px", fontWeight: "600", color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Feature / User Story
+            </label>
+            <span style={{ fontSize: "11px", color: featureWords >= 20 ? "#166534" : featureWords > 0 ? "#92400e" : "#94a3b8", fontWeight: featureWords >= 20 ? "600" : "400" }}>
+              {featureWords === 0 ? "0 words" : featureWords >= 20 ? `✓ ${featureWords} words` : `${featureWords} words`}
+            </span>
+          </div>
           <textarea
             value={feature}
             onChange={(e) => setFeature(e.target.value)}
             placeholder={`Describe the feature or paste your user story here.\n\nAs a user, I want to reset my password via email...`}
-            style={{
-              width: "100%",
-              height: "200px",
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "8px",
-              color: "#1e293b",
-              fontSize: "13px",
-              lineHeight: "1.7",
-              padding: "12px 14px",
-              resize: "none",
-              outline: "none",
-              fontFamily: "inherit",
-              boxSizing: "border-box",
-            }}
-            onFocus={(e) => (e.target.style.borderColor = "#185fa5")}
+            style={{ width: "100%", height: "200px", background: "#ffffff", border: "1px solid #e4e7ec", borderRadius: "8px", color: "#1e293b", fontSize: "13px", lineHeight: "1.7", padding: "12px 14px", resize: "none", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+            onFocus={(e) => (e.target.style.borderColor = "#1558a0")}
             onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
           />
         </div>
         <div>
-          <label
-            style={{
-              fontSize: "12px",
-              fontWeight: "600",
-              color: "#64748b",
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              display: "block",
-              marginBottom: "8px",
-            }}
-          >
-            Existing Tests{" "}
-            <span
-              style={{
-                color: "#94a3b8",
-                fontWeight: "400",
-                textTransform: "none",
-                fontSize: "11px",
-              }}
-            >
-              (one title per line)
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "8px" }}>
+            <label style={{ fontSize: "13px", fontWeight: "600", color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Existing Tests{" "}
+              <span style={{ color: "#94a3b8", fontWeight: "400", textTransform: "none", fontSize: "11px" }}>(one per line)</span>
+            </label>
+            <span style={{ fontSize: "11px", color: testLines >= 3 ? "#166534" : testLines > 0 ? "#92400e" : "#94a3b8", fontWeight: testLines >= 3 ? "600" : "400" }}>
+              {testLines === 0 ? "0 tests" : testLines >= 3 ? `✓ ${testLines} tests` : `${testLines} test${testLines > 1 ? "s" : ""}`}
             </span>
-          </label>
+          </div>
           <textarea
             value={existingTests}
             onChange={(e) => setExistingTests(e.target.value)}
             placeholder={`Verify login with valid credentials\nVerify login with invalid password\nVerify forgot password link is visible\nVerify password reset email is sent`}
-            style={{
-              width: "100%",
-              height: "200px",
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "8px",
-              color: "#1e293b",
-              fontSize: "13px",
-              lineHeight: "1.7",
-              padding: "12px 14px",
-              resize: "none",
-              outline: "none",
-              fontFamily: "inherit",
-              boxSizing: "border-box",
-            }}
-            onFocus={(e) => (e.target.style.borderColor = "#185fa5")}
+            style={{ width: "100%", height: "200px", background: "#ffffff", border: "1px solid #e4e7ec", borderRadius: "8px", color: "#1e293b", fontSize: "13px", lineHeight: "1.7", padding: "12px 14px", resize: "none", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+            onFocus={(e) => (e.target.style.borderColor = "#1558a0")}
             onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
           />
-          <p style={{ fontSize: "11px", color: "#94a3b8", margin: "6px 0 0" }}>
-            Paste test titles from TestRail, Xray, or any plain list.
-          </p>
+          <p style={{ fontSize: "11px", color: "#94a3b8", margin: "6px 0 0" }}>Paste test titles from TestRail, Xray, or any plain list.</p>
         </div>
       </div>
 
-      <GenerateButton
-        onClick={analyse}
-        disabled={!canAnalyse}
-        loading={loading}
-        label="Analyse Coverage Gaps →"
-        loadingLabel="Analysing coverage..."
-      />
-      {error && (
-        <p
-          style={{
-            color: "#dc2626",
-            fontSize: "13px",
-            textAlign: "center",
-            marginTop: "14px",
-          }}
-        >
-          {error}
-        </p>
+      <GenerateButton onClick={analyse} disabled={!canAnalyse} loading={loading} label="Analyse Coverage Gaps →" loadingLabel="Analysing coverage..." />
+
+      {disabledHint && !loading && (
+        <p style={{ textAlign: "center", fontSize: "12px", color: "#94a3b8", margin: "8px 0 0" }}>{disabledHint}</p>
+      )}
+
+      {error && <p style={{ color: "#dc2626", fontSize: "13px", textAlign: "center", marginTop: "14px" }}>{error}</p>}
+
+      {loading && <LoadingPanel tab="gap" bytesReceived={bytesReceived} />}
+
+      {/* Empty state */}
+      {!results && !loading && (
+        <div style={{ marginTop: "40px", textAlign: "center", padding: "32px 24px", border: "1px dashed #d0d5dd", borderRadius: "12px", background: "#fafbfc" }}>
+          <div style={{ fontSize: "28px", marginBottom: "12px" }}>🔍</div>
+          <p style={{ margin: "0 0 8px", fontSize: "14px", fontWeight: "600", color: "#475569" }}>Your gap analysis will appear here</p>
+          <p style={{ margin: "0 0 12px", fontSize: "13px", color: "#94a3b8" }}>You'll get a coverage score, a list of missing tests with steps, weak areas, and redundant duplicates.</p>
+        </div>
       )}
 
       {results && (
         <div ref={resultsRef} style={{ marginTop: "36px" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+            <ExportToolbar copied={copied} onCopy={copyMissing} onMD={exportGapMD} />
+            <button onClick={clearResults} style={{ background: "none", border: "1px solid #fca5a5", borderRadius: "6px", padding: "5px 10px", color: "#dc2626", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>Clear</button>
+          </div>
           <div
             style={{
               background: "#ffffff",
-              border: "1px solid #e2e8f0",
+              border: "1px solid #e4e7ec",
               borderRadius: "10px",
               padding: "16px 20px",
               marginBottom: "24px",
@@ -1982,7 +2312,7 @@ function GapDetectorTab() {
               <div
                 style={{
                   height: "8px",
-                  background: "#f1f5f9",
+                  background: "#f4f6f8",
                   borderRadius: "4px",
                   overflow: "hidden",
                   marginBottom: "8px",
@@ -2072,52 +2402,16 @@ function GapDetectorTab() {
                   justifyContent: "space-between",
                   marginBottom: "14px",
                   paddingBottom: "10px",
-                  borderBottom: "1px solid #e2e8f0",
+                  borderBottom: "1px solid #e4e7ec",
                 }}
               >
                 <div
                   style={{ display: "flex", alignItems: "center", gap: "8px" }}
                 >
                   <span>⚠</span>
-                  <span
-                    style={{
-                      fontSize: "13px",
-                      fontWeight: "700",
-                      color: "#1e293b",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                    }}
-                  >
-                    Missing Test Cases
-                  </span>
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      background: "#fef3c7",
-                      color: "#92400e",
-                      borderRadius: "4px",
-                      padding: "1px 7px",
-                      fontWeight: "600",
-                    }}
-                  >
-                    {results.missing.length}
-                  </span>
+                  <span style={{ fontSize: "13px", fontWeight: "700", color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Missing Test Cases</span>
+                  <span style={{ fontSize: "11px", background: "#fef3c7", color: "#92400e", borderRadius: "4px", padding: "1px 7px", fontWeight: "600" }}>{results.missing.length}</span>
                 </div>
-                <button
-                  onClick={copyMissing}
-                  style={{
-                    background: copied ? "#f0fdf4" : "#ffffff",
-                    border: `1px solid ${copied ? "#86efac" : "#e2e8f0"}`,
-                    borderRadius: "6px",
-                    padding: "5px 10px",
-                    color: copied ? "#166634" : "#64748b",
-                    fontSize: "11px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                  }}
-                >
-                  {copied ? "✓ Copied!" : "Copy Missing"}
-                </button>
               </div>
               {results.missing.map((tc, i) => (
                 <MissingTestCard key={i} tc={tc} index={i} />
@@ -2134,7 +2428,7 @@ function GapDetectorTab() {
                   gap: "8px",
                   marginBottom: "14px",
                   paddingBottom: "10px",
-                  borderBottom: "1px solid #e2e8f0",
+                  borderBottom: "1px solid #e4e7ec",
                 }}
               >
                 <span>↓</span>
@@ -2167,7 +2461,7 @@ function GapDetectorTab() {
                   key={i}
                   style={{
                     background: "#ffffff",
-                    border: "1px solid #e2e8f0",
+                    border: "1px solid #e4e7ec",
                     borderRadius: "8px",
                     padding: "12px 14px",
                     marginBottom: "8px",
@@ -2206,7 +2500,7 @@ function GapDetectorTab() {
                   gap: "8px",
                   marginBottom: "14px",
                   paddingBottom: "10px",
-                  borderBottom: "1px solid #e2e8f0",
+                  borderBottom: "1px solid #e4e7ec",
                 }}
               >
                 <span>≈</span>
@@ -2224,7 +2518,7 @@ function GapDetectorTab() {
                 <span
                   style={{
                     fontSize: "11px",
-                    background: "#f1f5f9",
+                    background: "#f4f6f8",
                     color: "#475569",
                     borderRadius: "4px",
                     padding: "1px 7px",
@@ -2239,7 +2533,7 @@ function GapDetectorTab() {
                   key={i}
                   style={{
                     background: "#ffffff",
-                    border: "1px solid #e2e8f0",
+                    border: "1px solid #e4e7ec",
                     borderRadius: "8px",
                     padding: "12px 14px",
                     marginBottom: "8px",
@@ -2258,11 +2552,11 @@ function GapDetectorTab() {
                         key={j}
                         style={{
                           fontSize: "11px",
-                          background: "#f1f5f9",
+                          background: "#f4f6f8",
                           color: "#475569",
                           padding: "3px 8px",
                           borderRadius: "4px",
-                          border: "1px solid #e2e8f0",
+                          border: "1px solid #e4e7ec",
                         }}
                       >
                         {t}
@@ -2290,27 +2584,49 @@ function GapDetectorTab() {
 
 // ─── RISK ASSESSMENT TAB ──────────────────────────────────────────────────────
 
-function RiskAssessmentTab() {
+function RiskAssessmentTab({ onResults }) {
   const [description, setDescription] = useState("");
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [bytesReceived, setBytesReceived] = useState(0);
   const [error, setError] = useState(null);
   const resultsRef = useRef(null);
 
+  const onResultsRef = useRef(onResults);
+
+  useEffect(() => {
+    const saved = loadTab("risk");
+    if (saved) {
+      if (saved.description) setDescription(saved.description);
+      if (saved.results) {
+        setResults(saved.results);
+        onResultsRef.current && onResultsRef.current(saved.results.risks?.length || 0);
+      }
+    }
+  }, []);
+
+  // Persist input on change
+  useEffect(() => {
+    const saved = loadTab("risk") || {};
+    saveTab("risk", { ...saved, description });
+  }, [description]);
+
+  const wordCount = description.trim() ? description.trim().split(/\s+/).length : 0;
   const canAnalyse = description.trim().length > 0 && !loading;
+  const disabledHint = description.trim().length === 0 ? "Describe your feature or product above to continue" : null;
 
   const analyse = async () => {
     if (!canAnalyse) return;
     setLoading(true);
+    setBytesReceived(0);
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(buildRiskPrompt(description), 6000);
+      const parsed = await callClaude(buildRiskPrompt(description), 6000, (n) => setBytesReceived(n));
       setResults(parsed);
-      setTimeout(
-        () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
-        100,
-      );
+      saveTab("risk", { results: parsed });
+      onResults && onResults(parsed.risks?.length || 0);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch (err) {
       console.error("Risk assessment error:", err);
       setError(err.message);
@@ -2326,72 +2642,57 @@ function RiskAssessmentTab() {
 
   return (
     <div>
+      {/* Tab description */}
+      <div style={{ marginBottom: "22px" }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>Risk Assessment</h2>
+        <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>
+          Describe your feature and get a prioritised risk register across Functional, Security, Performance, Integration and more.
+        </p>
+      </div>
+
       <div style={{ marginBottom: "8px" }}>
-        <label
-          style={{
-            fontSize: "12px",
-            fontWeight: "600",
-            color: "#64748b",
-            textTransform: "uppercase",
-            letterSpacing: "0.06em",
-            display: "block",
-            marginBottom: "8px",
-          }}
-        >
-          Product / Feature Description
-        </label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "8px" }}>
+          <label style={{ fontSize: "13px", fontWeight: "600", color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Product / Feature Description
+          </label>
+          <span style={{ fontSize: "11px", color: wordCount >= 40 ? "#166534" : wordCount > 0 ? "#92400e" : "#94a3b8", fontWeight: wordCount >= 40 ? "600" : "400" }}>
+            {wordCount === 0 ? "0 words" : wordCount >= 40 ? `✓ ${wordCount} words` : `${wordCount} words — more detail = more accurate risks`}
+          </span>
+        </div>
         <p style={{ fontSize: "12px", color: "#94a3b8", margin: "0 0 10px" }}>
-          Describe your product or feature in as much detail as possible — tech
-          stack, user types, integrations, scale, known constraints. The more
-          context, the more accurate the assessment.
+          Include tech stack, user types, integrations, scale, and known constraints for the most accurate assessment.
         </p>
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder={`Example:\n\nWe are building a mobile payment feature for a casual mobile game targeting 10M+ users. Players can purchase in-game currency (gems) using real money via Apple Pay, Google Pay, and credit cards. Purchases range from $0.99 to $99.99. The backend uses a Node.js microservice connected to Stripe. Transactions are logged in PostgreSQL. The feature includes a receipt system, parental controls for under-18 accounts, and regional pricing for 15 countries. The game runs on iOS 14+ and Android 8+.`}
-          style={{
-            width: "100%",
-            minHeight: "220px",
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: "8px",
-            color: "#1e293b",
-            fontSize: "13.5px",
-            lineHeight: "1.7",
-            padding: "12px 14px",
-            resize: "vertical",
-            outline: "none",
-            fontFamily: "inherit",
-            boxSizing: "border-box",
-          }}
-          onFocus={(e) => (e.target.style.borderColor = "#185fa5")}
+          style={{ width: "100%", minHeight: "220px", background: "#ffffff", border: "1px solid #e4e7ec", borderRadius: "8px", color: "#1e293b", fontSize: "13.5px", lineHeight: "1.7", padding: "12px 14px", resize: "vertical", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+          onFocus={(e) => (e.target.style.borderColor = "#1558a0")}
           onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
         />
         <p style={{ fontSize: "11px", color: "#94a3b8", margin: "6px 0 0" }}>
-          Covers: Functional · Technical · Performance · Security · Integration
-          · UX · Data · Edge Case risks
+          Covers: Functional · Technical · Performance · Security · Integration · UX · Data · Edge Case risks
         </p>
       </div>
       <div style={{ marginTop: "16px" }}>
-        <GenerateButton
-          onClick={analyse}
-          disabled={!canAnalyse}
-          loading={loading}
-          label="Generate Risk Assessment →"
-          loadingLabel="Analysing risks..."
-        />
+        <GenerateButton onClick={analyse} disabled={!canAnalyse} loading={loading} label="Generate Risk Assessment →" loadingLabel="Analysing risks..." />
       </div>
-      {error && (
-        <p
-          style={{
-            color: "#dc2626",
-            fontSize: "13px",
-            textAlign: "center",
-            marginTop: "14px",
-          }}
-        >
-          {error}
-        </p>
+
+      {disabledHint && !loading && (
+        <p style={{ textAlign: "center", fontSize: "12px", color: "#94a3b8", margin: "8px 0 0" }}>{disabledHint}</p>
+      )}
+
+      {error && <p style={{ color: "#dc2626", fontSize: "13px", textAlign: "center", marginTop: "14px" }}>{error}</p>}
+
+      {loading && <LoadingPanel tab="risk" bytesReceived={bytesReceived} />}
+
+      {/* Empty state */}
+      {!results && !loading && (
+        <div style={{ marginTop: "40px", textAlign: "center", padding: "32px 24px", border: "1px dashed #d0d5dd", borderRadius: "12px", background: "#fafbfc" }}>
+          <div style={{ fontSize: "28px", marginBottom: "12px" }}>🛡️</div>
+          <p style={{ margin: "0 0 8px", fontSize: "14px", fontWeight: "600", color: "#475569" }}>Your risk register will appear here</p>
+          <p style={{ margin: 0, fontSize: "13px", color: "#94a3b8" }}>You'll get an overall risk score, a visual risk matrix, and a prioritised list of risks with mitigation actions.</p>
+        </div>
       )}
 
       {results && (
@@ -2500,7 +2801,7 @@ function RiskAssessmentTab() {
             <div
               style={{
                 background: "#ffffff",
-                border: "1px solid #e2e8f0",
+                border: "1px solid #e4e7ec",
                 borderRadius: "10px",
                 padding: "14px 16px",
               }}
@@ -2590,8 +2891,24 @@ function DocumentationTab() {
   const [input, setInput] = useState("");
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [bytesReceived, setBytesReceived] = useState(0);
   const [error, setError] = useState(null);
   const resultsRef = useRef(null);
+
+  useEffect(() => {
+    const saved = loadTab("docs");
+    if (saved) {
+      if (saved.input) setInput(saved.input);
+      if (saved.docMode) setDocMode(saved.docMode);
+      if (saved.results) setResults(saved.results);
+    }
+  }, []);
+
+  // Persist input fields on change
+  useEffect(() => {
+    const saved = loadTab("docs") || {};
+    saveTab("docs", { ...saved, input, docMode });
+  }, [input, docMode]);
 
   const canGenerate = input.trim().length > 0 && !loading;
   const currentMode = DOC_MODES.find((m) => m.id === docMode);
@@ -2605,11 +2922,14 @@ function DocumentationTab() {
   const generate = async () => {
     if (!canGenerate) return;
     setLoading(true);
+    setBytesReceived(0);
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(promptBuilders[docMode](input));
-      setResults({ type: docMode, data: parsed });
+      const parsed = await callClaude(promptBuilders[docMode](input), 4000, (n) => setBytesReceived(n));
+      const r = { type: docMode, data: parsed };
+      setResults(r);
+      saveTab("docs", { results: r });
       setTimeout(
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
         100,
@@ -2629,6 +2949,14 @@ function DocumentationTab() {
 
   return (
     <div>
+      {/* Tab description */}
+      <div style={{ marginBottom: "22px" }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>Documentation</h2>
+        <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>
+          Generate formal QA documents — test plans, feature onboarding guides, and automation strategy reports.
+        </p>
+      </div>
+
       <div style={{ marginBottom: "20px" }}>
         <SectionLabel>Document Type</SectionLabel>
         <div
@@ -2650,7 +2978,7 @@ function DocumentationTab() {
                 }}
                 style={{
                   background: active ? "#e6f1fb" : "#ffffff",
-                  border: `${active ? "2px" : "1px"} solid ${active ? "#185fa5" : "#e2e8f0"}`,
+                  border: `${active ? "2px" : "1px"} solid ${active ? "#185fa5" : "#dde1e7"}`,
                   borderRadius: "8px",
                   padding: "14px",
                   cursor: "pointer",
@@ -2706,7 +3034,7 @@ function DocumentationTab() {
             width: "100%",
             minHeight: "180px",
             background: "#ffffff",
-            border: "1px solid #e2e8f0",
+            border: "1px solid #e4e7ec",
             borderRadius: "8px",
             color: "#1e293b",
             fontSize: "13.5px",
@@ -2717,7 +3045,7 @@ function DocumentationTab() {
             fontFamily: "inherit",
             boxSizing: "border-box",
           }}
-          onFocus={(e) => (e.target.style.borderColor = "#185fa5")}
+          onFocus={(e) => (e.target.style.borderColor = "#1558a0")}
           onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
         />
       </div>
@@ -2729,17 +3057,24 @@ function DocumentationTab() {
         label={`Generate ${currentMode.label} →`}
         loadingLabel={`Generating ${currentMode.label}...`}
       />
-      {error && (
-        <p
-          style={{
-            color: "#dc2626",
-            fontSize: "13px",
-            textAlign: "center",
-            marginTop: "14px",
-          }}
-        >
-          {error}
+      {!canGenerate && !loading && (
+        <p style={{ textAlign: "center", fontSize: "12px", color: "#94a3b8", margin: "8px 0 0" }}>
+          Add your feature or epic description above to continue
         </p>
+      )}
+      {error && (
+        <p style={{ color: "#dc2626", fontSize: "13px", textAlign: "center", marginTop: "14px" }}>{error}</p>
+      )}
+
+      {loading && <LoadingPanel tab="docs" bytesReceived={bytesReceived} />}
+
+      {/* Empty state */}
+      {!results && !loading && (
+        <div style={{ marginTop: "40px", textAlign: "center", padding: "32px 24px", border: "1px dashed #d0d5dd", borderRadius: "12px", background: "#fafbfc" }}>
+          <div style={{ fontSize: "28px", marginBottom: "12px" }}>📄</div>
+          <p style={{ margin: "0 0 8px", fontSize: "14px", fontWeight: "600", color: "#475569" }}>Your document will appear here</p>
+          <p style={{ margin: 0, fontSize: "13px", color: "#94a3b8" }}>Choose a document type, describe your feature, and get a structured, ready-to-share QA document.</p>
+        </div>
       )}
 
       {results && (
@@ -2754,42 +3089,18 @@ function DocumentationTab() {
                   justifyContent: "space-between",
                   marginBottom: "20px",
                   paddingBottom: "12px",
-                  borderBottom: "1px solid #e2e8f0",
+                  borderBottom: "1px solid #e4e7ec",
                 }}
               >
                 <div>
-                  <h2
-                    style={{
-                      margin: 0,
-                      fontSize: "16px",
-                      fontWeight: "700",
-                      color: "#0f172a",
-                    }}
-                  >
-                    {results.data.title}
-                  </h2>
-                  <p
-                    style={{
-                      margin: "2px 0 0",
-                      fontSize: "12px",
-                      color: "#94a3b8",
-                    }}
-                  >
-                    Version {results.data.version}
-                  </p>
+                  <h2 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>{results.data.title}</h2>
+                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#94a3b8" }}>Version {results.data.version}</p>
                 </div>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    color: "#94a3b8",
-                    background: "#f8fafc",
-                    border: "1px solid #e2e8f0",
-                    padding: "4px 10px",
-                    borderRadius: "6px",
-                  }}
-                >
-                  Test Plan
-                </span>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button onClick={() => exportDocMD(results.data.title, results.data.sections)} style={{ background: "#ffffff", border: "1px solid #dde1e7", borderRadius: "6px", padding: "5px 11px", color: "#64748b", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>⬇ Markdown</button>
+                  <button onClick={() => { setResults(null); clearTab("docs"); }} style={{ background: "none", border: "1px solid #fca5a5", borderRadius: "6px", padding: "5px 10px", color: "#dc2626", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>Clear</button>
+                  <span style={{ fontSize: "11px", color: "#94a3b8", background: "#f8fafc", border: "1px solid #e4e7ec", padding: "4px 10px", borderRadius: "6px" }}>Test Plan</span>
+                </div>
               </div>
               {results.data.sections?.map((s, i) => (
                 <DocSection key={i} heading={s.heading} content={s.content} />
@@ -2800,38 +3111,13 @@ function DocumentationTab() {
           {/* Onboarding Doc */}
           {results.type === "onboarding" && (
             <div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  justifyContent: "space-between",
-                  marginBottom: "20px",
-                  paddingBottom: "12px",
-                  borderBottom: "1px solid #e2e8f0",
-                }}
-              >
-                <h2
-                  style={{
-                    margin: 0,
-                    fontSize: "16px",
-                    fontWeight: "700",
-                    color: "#0f172a",
-                  }}
-                >
-                  {results.data.title}
-                </h2>
-                <span
-                  style={{
-                    fontSize: "11px",
-                    color: "#94a3b8",
-                    background: "#f8fafc",
-                    border: "1px solid #e2e8f0",
-                    padding: "4px 10px",
-                    borderRadius: "6px",
-                  }}
-                >
-                  QA Feature Guide
-                </span>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "20px", paddingBottom: "12px", borderBottom: "1px solid #e4e7ec", flexWrap: "wrap", gap: "10px" }}>
+                <h2 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>{results.data.title}</h2>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button onClick={() => exportDocMD(results.data.title, results.data.sections)} style={{ background: "#ffffff", border: "1px solid #dde1e7", borderRadius: "6px", padding: "5px 11px", color: "#64748b", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>⬇ Markdown</button>
+                  <button onClick={() => { setResults(null); clearTab("docs"); }} style={{ background: "none", border: "1px solid #fca5a5", borderRadius: "6px", padding: "5px 10px", color: "#dc2626", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>Clear</button>
+                  <span style={{ fontSize: "11px", color: "#94a3b8", background: "#f8fafc", border: "1px solid #e4e7ec", padding: "4px 10px", borderRadius: "6px" }}>QA Feature Guide</span>
+                </div>
               </div>
               {results.data.sections?.map((s, i) => (
                 <DocSection key={i} heading={s.heading} content={s.content} />
@@ -2842,10 +3128,14 @@ function DocumentationTab() {
           {/* Automation Plan */}
           {results.type === "automation" && (
             <div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginBottom: "14px" }}>
+                <button onClick={() => { const sections = [{heading:"Summary",content:results.data.summary},{heading:"Automate",content:(results.data.automate||[]).map(i=>`${i.name} (${i.level}, ${i.priority})\n${i.reason}\n→ ${i.approach||""}`).join("\n\n")},{heading:"Keep Manual",content:(results.data.avoid||[]).map(i=>`${i.name}\n${i.reason}`).join("\n\n")}]; exportDocMD("Automation Plan", sections); }} style={{ background: "#ffffff", border: "1px solid #dde1e7", borderRadius: "6px", padding: "5px 11px", color: "#64748b", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>⬇ Markdown</button>
+                <button onClick={() => { setResults(null); clearTab("docs"); }} style={{ background: "none", border: "1px solid #fca5a5", borderRadius: "6px", padding: "5px 10px", color: "#dc2626", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>Clear</button>
+              </div>
               <div
                 style={{
                   background: scoreBg(results.data.automationScore),
-                  border: "1px solid #e2e8f0",
+                  border: "1px solid #e4e7ec",
                   borderRadius: "10px",
                   padding: "16px 20px",
                   marginBottom: "28px",
@@ -2887,7 +3177,7 @@ function DocumentationTab() {
                   <div
                     style={{
                       height: "8px",
-                      background: "#f1f5f9",
+                      background: "#f4f6f8",
                       borderRadius: "4px",
                       overflow: "hidden",
                       marginBottom: "8px",
@@ -2984,7 +3274,7 @@ function DocumentationTab() {
                       gap: "8px",
                       marginBottom: "14px",
                       paddingBottom: "10px",
-                      borderBottom: "1px solid #e2e8f0",
+                      borderBottom: "1px solid #e4e7ec",
                     }}
                   >
                     <span>✓</span>
@@ -3027,7 +3317,7 @@ function DocumentationTab() {
                       gap: "8px",
                       marginBottom: "14px",
                       paddingBottom: "10px",
-                      borderBottom: "1px solid #e2e8f0",
+                      borderBottom: "1px solid #e4e7ec",
                     }}
                   >
                     <span>✕</span>
@@ -3070,7 +3360,7 @@ function DocumentationTab() {
                       gap: "8px",
                       marginBottom: "14px",
                       paddingBottom: "10px",
-                      borderBottom: "1px solid #e2e8f0",
+                      borderBottom: "1px solid #e4e7ec",
                     }}
                   >
                     <span>⚙</span>
@@ -3106,7 +3396,7 @@ function DocumentationTab() {
                           key={i}
                           style={{
                             background: "#ffffff",
-                            border: "1px solid #e2e8f0",
+                            border: "1px solid #e4e7ec",
                             borderRadius: "8px",
                             padding: "14px",
                           }}
@@ -3140,7 +3430,7 @@ function DocumentationTab() {
                                 style={{
                                   fontSize: "12px",
                                   background: "#f8fafc",
-                                  border: "1px solid #e2e8f0",
+                                  border: "1px solid #e4e7ec",
                                   color: "#475569",
                                   padding: "3px 8px",
                                   borderRadius: "4px",
@@ -3177,7 +3467,7 @@ function DocumentationTab() {
                       gap: "8px",
                       marginBottom: "14px",
                       paddingBottom: "10px",
-                      borderBottom: "1px solid #e2e8f0",
+                      borderBottom: "1px solid #e4e7ec",
                     }}
                   >
                     <span>💡</span>
@@ -3236,123 +3526,592 @@ function DocumentationTab() {
   );
 }
 
+// ─── JIRA TAB ─────────────────────────────────────────────────────────────────
+
+function JqlCard({ item, index }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const categoryColors = {
+    "Bug Tracking":      { bg: "#fcebeb", color: "#a32d2d" },
+    "Sprint Health":     { bg: "#e6f1fb", color: "#185fa5" },
+    "Release Readiness": { bg: "#eeedfe", color: "#534ab7" },
+    "Team Workload":     { bg: "#faeeda", color: "#854f0b" },
+    "QA Metrics":        { bg: "#f0fdf4", color: "#166534" },
+    "Custom":            { bg: "#f1f5f9", color: "#475569" },
+    "Regression":        { bg: "#faeeda", color: "#854f0b" },
+  };
+  const cc = categoryColors[item.category] || categoryColors["Custom"];
+
+  const copy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(item.jql);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div
+      onClick={() => setOpen(!open)}
+      style={{ background: open ? "#f8fafc" : "#ffffff", border: `1px solid ${open ? "#c8d0da" : "#e4e7ec"}`, borderRadius: "8px", padding: "12px 14px", cursor: "pointer", transition: "all 0.15s", marginBottom: "8px" }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span style={{ color: "#94a3b8", fontFamily: "monospace", fontSize: "11px", minWidth: "24px" }}>
+          #{String(index + 1).padStart(2, "0")}
+        </span>
+        <span style={{ fontSize: "10px", fontWeight: "600", padding: "2px 7px", borderRadius: "4px", background: cc.bg, color: cc.color, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+          {item.category}
+        </span>
+        <span style={{ color: "#1e293b", fontSize: "13px", flex: 1, fontWeight: "500" }}>{item.name || item.title}</span>
+        <button onClick={copy} style={{ fontSize: "11px", color: copied ? "#166534" : "#64748b", background: copied ? "#f0fdf4" : "#f8fafc", border: `1px solid ${copied ? "#86efac" : "#dde1e7"}`, borderRadius: "4px", padding: "3px 8px", cursor: "pointer", whiteSpace: "nowrap", fontWeight: "600" }}>
+          {copied ? "✓ Copied" : "Copy JQL"}
+        </button>
+        <span style={{ color: "#94a3b8", fontSize: "11px" }}>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #e4e7ec" }}>
+          <div style={{ marginBottom: "12px" }}>
+            <p style={{ fontSize: "11px", fontWeight: "600", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", margin: "0 0 6px" }}>JQL Query</p>
+            <pre style={{ background: "#0f172a", color: "#7dd3fc", fontSize: "12px", padding: "10px 14px", borderRadius: "6px", fontFamily: "monospace", whiteSpace: "pre-wrap", margin: 0, lineHeight: "1.6" }}>
+              {item.jql}
+            </pre>
+          </div>
+          <div style={{ marginBottom: "12px" }}>
+            <p style={{ fontSize: "11px", fontWeight: "600", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", margin: "0 0 6px" }}>How it works</p>
+            <p style={{ fontSize: "13px", color: "#475569", lineHeight: "1.6", margin: 0 }}>{item.explanation}</p>
+          </div>
+          <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderLeft: "3px solid #1558a0", borderRadius: "6px", padding: "8px 12px" }}>
+            <p style={{ fontSize: "11px", fontWeight: "700", color: "#185fa5", textTransform: "uppercase", letterSpacing: "0.07em", margin: "0 0 4px" }}>💡 Purpose</p>
+            <p style={{ fontSize: "13px", color: "#475569", lineHeight: "1.5", margin: 0 }}>{item.purpose}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GadgetCard({ g }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (!g.filter) return;
+    navigator.clipboard.writeText(g.filter);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div style={{ background: "#ffffff", border: "1px solid #e4e7ec", borderRadius: "8px", padding: "12px 14px" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "8px", marginBottom: "4px" }}>
+        <div>
+          <p style={{ fontSize: "13px", fontWeight: "600", color: "#0f172a", margin: "0 0 2px" }}>{g.title || g.name}</p>
+          <p style={{ fontSize: "11px", color: "#94a3b8", margin: 0, fontStyle: "italic" }}>{g.name}</p>
+        </div>
+        {g.filter && (
+          <button onClick={copy} style={{ fontSize: "11px", color: copied ? "#166534" : "#64748b", background: copied ? "#f0fdf4" : "#f8fafc", border: `1px solid ${copied ? "#86efac" : "#dde1e7"}`, borderRadius: "4px", padding: "3px 8px", cursor: "pointer", whiteSpace: "nowrap", fontWeight: "600", flexShrink: 0 }}>
+            {copied ? "✓" : "Copy JQL"}
+          </button>
+        )}
+      </div>
+      {g.filter && (
+        <pre style={{ background: "#0f172a", color: "#7dd3fc", fontSize: "11px", padding: "6px 10px", borderRadius: "4px", fontFamily: "monospace", whiteSpace: "pre-wrap", margin: "8px 0", lineHeight: "1.5" }}>{g.filter}</pre>
+      )}
+      {g.insight && <p style={{ fontSize: "11px", color: "#185fa5", margin: "0 0 4px", lineHeight: "1.4", fontStyle: "italic" }}>💡 {g.insight}</p>}
+      <p style={{ fontSize: "11px", color: "#64748b", margin: 0, lineHeight: "1.4" }}>⚙ {g.config}</p>
+    </div>
+  );
+}
+
+function AutomationRuleCard({ rule, index }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copyRule = (e) => {
+    e.stopPropagation();
+    const text = [
+      `Rule: ${rule.title}`,
+      `Trigger: ${rule.trigger}`,
+      rule.conditions ? `Conditions: ${rule.conditions}` : null,
+      `Action: ${rule.action}`,
+      `Benefit: ${rule.benefit}`,
+    ].filter(Boolean).join("\n");
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div
+      onClick={() => setOpen(!open)}
+      style={{ background: open ? "#f8fafc" : "#ffffff", border: `1px solid ${open ? "#c8d0da" : "#e4e7ec"}`, borderLeft: "4px solid #534ab7", borderRadius: "8px", padding: "12px 14px", cursor: "pointer", transition: "all 0.15s", marginBottom: "8px" }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span style={{ color: "#94a3b8", fontFamily: "monospace", fontSize: "11px", minWidth: "24px" }}>
+          #{String(index + 1).padStart(2, "0")}
+        </span>
+        <span style={{ color: "#1e293b", fontSize: "13px", flex: 1, fontWeight: "500" }}>{rule.title}</span>
+        <button onClick={copyRule} style={{ fontSize: "11px", color: copied ? "#166534" : "#64748b", background: copied ? "#f0fdf4" : "#f8fafc", border: `1px solid ${copied ? "#86efac" : "#dde1e7"}`, borderRadius: "4px", padding: "3px 8px", cursor: "pointer", whiteSpace: "nowrap", fontWeight: "600" }}>
+          {copied ? "✓ Copied" : "Copy Rule"}
+        </button>
+        <span style={{ color: "#94a3b8", fontSize: "11px" }}>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #e4e7ec" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "10px" }}>
+            <div style={{ background: "#fef3c7", borderRadius: "8px", padding: "10px 12px" }}>
+              <p style={{ fontSize: "11px", color: "#92400e", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 4px" }}>⚡ Trigger</p>
+              <p style={{ fontSize: "13px", color: "#92400e", margin: 0, lineHeight: "1.5" }}>{rule.trigger}</p>
+            </div>
+            <div style={{ background: "#e6f1fb", borderRadius: "8px", padding: "10px 12px" }}>
+              <p style={{ fontSize: "11px", color: "#185fa5", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 4px" }}>→ Action</p>
+              <p style={{ fontSize: "13px", color: "#185fa5", margin: 0, lineHeight: "1.5" }}>{rule.action}</p>
+            </div>
+          </div>
+          {rule.conditions && (
+            <div style={{ marginBottom: "10px", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: "6px", padding: "8px 12px" }}>
+              <p style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.07em", margin: "0 0 4px" }}>⚙ Conditions</p>
+              <p style={{ fontSize: "13px", color: "#475569", lineHeight: "1.5", margin: 0 }}>{rule.conditions}</p>
+            </div>
+          )}
+          <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: "6px", padding: "8px 12px" }}>
+            <p style={{ fontSize: "11px", fontWeight: "700", color: "#166534", textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 4px" }}>✓ Benefit</p>
+            <p style={{ fontSize: "13px", color: "#166534", lineHeight: "1.5", margin: 0 }}>{rule.benefit}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JiraTab() {
+  const [description, setDescription] = useState("");
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [bytesReceived, setBytesReceived] = useState(0);
+  const [error, setError] = useState(null);
+  const resultsRef = useRef(null);
+
+  useEffect(() => {
+    const saved = loadTab("jira");
+    if (saved) {
+      if (saved.description) setDescription(saved.description);
+      if (saved.results) setResults(saved.results);
+    }
+  }, []);
+
+  // Persist input on change
+  useEffect(() => {
+    const saved = loadTab("jira") || {};
+    saveTab("jira", { ...saved, description });
+  }, [description]);
+
+  const canGenerate = description.trim().length > 0 && !loading;
+
+  const generate = async () => {
+    if (!canGenerate) return;
+    setLoading(true);
+    setBytesReceived(0);
+    setError(null);
+    setResults(null);
+    try {
+      const parsed = await callClaude(buildJiraPrompt(description), 8000, (n) => setBytesReceived(n));
+      setResults(parsed);
+      saveTab("jira", { results: parsed });
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+    } catch (err) {
+      console.error("Jira tab error:", err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportJiraMD = () => {
+    if (!results) return;
+    const lines = ["# Jira Strategy\n", `${results.summary}\n`];
+    if (results.dashboards?.length) {
+      lines.push("## Dashboards\n");
+      results.dashboards.forEach(d => {
+        lines.push(`### ${d.name}`);
+        lines.push(`**Audience:** ${d.audience}`);
+        lines.push(`**Purpose:** ${d.purpose}\n`);
+        d.gadgets?.forEach(g => {
+          lines.push(`#### ${g.title || g.name} _(${g.name})_`);
+          if (g.filter) lines.push(`\`\`\`jql\n${g.filter}\n\`\`\``);
+          if (g.insight) lines.push(`💡 ${g.insight}`);
+          lines.push(`⚙ ${g.config}\n`);
+        });
+      });
+    }
+    if (results.filters?.length) {
+      lines.push("## Saved Filters\n");
+      results.filters.forEach(f => {
+        lines.push(`### ${f.name || f.title} — ${f.category}`);
+        lines.push(`\`\`\`jql\n${f.jql}\n\`\`\``);
+        lines.push(`${f.explanation}\n`);
+        lines.push(`**Purpose:** ${f.purpose}\n`);
+      });
+    }
+    if (results.automation?.length) {
+      lines.push("## Automation Rules\n");
+      results.automation.forEach(r => {
+        lines.push(`### ${r.title}`);
+        lines.push(`- **Trigger:** ${r.trigger}`);
+        if (r.conditions) lines.push(`- **Conditions:** ${r.conditions}`);
+        lines.push(`- **Action:** ${r.action}`);
+        lines.push(`- **Benefit:** ${r.benefit}\n`);
+      });
+    }
+    if (results.boardTips?.length) {
+      lines.push("## Board Configuration Tips\n");
+      results.boardTips.forEach((t, i) => lines.push(`${i + 1}. ${t}\n`));
+    }
+    downloadFile("jira-strategy.md", lines.join("\n"), "text/markdown");
+  };
+
+  const clearResults = () => { setResults(null); clearTab("jira"); };
+
+  return (
+    <div>
+      <div style={{ marginBottom: "22px" }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>Jira & JQL</h2>
+        <p style={{ margin: 0, fontSize: "13px", color: "#64748b" }}>
+          Describe your team and project — get custom dashboards, saved JQL filters, automation rules, and board tips.
+        </p>
+      </div>
+
+      <div style={{ marginBottom: "8px" }}>
+        <label style={{ fontSize: "13px", fontWeight: "600", color: "#475569", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: "8px" }}>
+          Describe Your Team & Goals
+        </label>
+        <p style={{ fontSize: "12px", color: "#94a3b8", margin: "0 0 10px" }}>
+          Describe your team structure, project type, and what you want to track or improve in Jira. The more context you give, the more targeted the output.
+        </p>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder={`What to include:\n\n- What the project is (mobile game, SaaS platform, e-commerce)\n- What you want to track or have visibility on (release readiness, regression health, bug escape rate)\n- Current pain points (hard to filter bugs by version, no dashboard for test cycle progress)\n- Sprint or release cycle info if relevant\n- Any tools you integrate with (Slack, Confluence, CI pipeline)\n- Whether you use Scrum or Kanban, team-managed or company-managed Jira\n\nExample:\nWe are building a multiplayer mobile game. We run 2-week sprints and release to stores every 6 weeks. We need dashboards that show regression test status per build, which critical bugs are blocking release, and how test coverage maps to new features in the sprint. We struggle to see at a glance whether we are safe to release. We use Slack and have a Jenkins CI pipeline.`}
+          style={{ width: "100%", minHeight: "220px", background: "#ffffff", border: "1px solid #e4e7ec", borderRadius: "8px", color: "#1e293b", fontSize: "13.5px", lineHeight: "1.7", padding: "12px 14px", resize: "vertical", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+          onFocus={(e) => (e.target.style.borderColor = "#1558a0")}
+          onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
+        />
+      </div>
+
+      <div style={{ marginTop: "16px" }}>
+        <GenerateButton onClick={generate} disabled={!canGenerate} loading={loading} label="Generate Jira Strategy →" loadingLabel="Building your Jira strategy..." />
+      </div>
+
+      {!canGenerate && !loading && (
+        <p style={{ textAlign: "center", fontSize: "12px", color: "#94a3b8", margin: "8px 0 0" }}>
+          Describe your team and project above to continue
+        </p>
+      )}
+
+      {error && <p style={{ color: "#dc2626", fontSize: "13px", textAlign: "center", marginTop: "14px" }}>{error}</p>}
+      {loading && <LoadingPanel tab="jira" bytesReceived={bytesReceived} />}
+
+      {!results && !loading && (
+        <div style={{ marginTop: "40px", textAlign: "center", padding: "32px 24px", border: "1px dashed #d0d5dd", borderRadius: "12px", background: "#fafbfc" }}>
+          <div style={{ fontSize: "28px", marginBottom: "12px" }}>📊</div>
+          <p style={{ margin: "0 0 8px", fontSize: "14px", fontWeight: "600", color: "#475569" }}>Your Jira strategy will appear here</p>
+          <p style={{ margin: 0, fontSize: "13px", color: "#94a3b8" }}>You'll get dashboard layouts, ready-to-use JQL filters with copy buttons, automation rules, and board configuration tips tailored to your project.</p>
+        </div>
+      )}
+
+      {results && (
+        <div ref={resultsRef} style={{ marginTop: "36px" }}>
+
+          {/* Results header */}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginBottom: "16px", flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={exportJiraMD} style={{ background: "#ffffff", border: "1px solid #dde1e7", borderRadius: "6px", padding: "5px 11px", color: "#64748b", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>⬇ Markdown</button>
+            <button onClick={clearResults} style={{ background: "none", border: "1px solid #fca5a5", borderRadius: "6px", padding: "5px 10px", color: "#dc2626", fontSize: "12px", fontWeight: "600", cursor: "pointer" }}>Clear</button>
+          </div>
+
+          {/* Summary */}
+          <div style={{ background: "#e6f1fb", border: "1px solid #93c5fd", borderRadius: "10px", padding: "14px 18px", marginBottom: "28px" }}>
+            <p style={{ fontSize: "13px", color: "#185fa5", lineHeight: "1.6", margin: 0 }}>{results.summary}</p>
+          </div>
+
+          {/* Dashboards */}
+          {results.dashboards?.length > 0 && (
+            <div style={{ marginBottom: "32px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px", paddingBottom: "10px", borderBottom: "1px solid #e4e7ec" }}>
+                <span style={{ fontSize: "16px" }}>📊</span>
+                <span style={{ fontSize: "13px", fontWeight: "700", color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Dashboards</span>
+                <span style={{ fontSize: "11px", background: "#e6f1fb", color: "#185fa5", borderRadius: "4px", padding: "1px 7px", fontWeight: "600" }}>{results.dashboards.length}</span>
+              </div>
+              {results.dashboards.map((dash, di) => (
+                <div key={di} style={{ marginBottom: "24px", border: "1px solid #e4e7ec", borderRadius: "10px", overflow: "hidden" }}>
+                  <div style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", padding: "12px 16px" }}>
+                    <p style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a", margin: "0 0 2px" }}>{dash.name}</p>
+                    <p style={{ fontSize: "12px", color: "#64748b", margin: "0 0 4px" }}>👤 {dash.audience}</p>
+                    <p style={{ fontSize: "12px", color: "#475569", margin: 0, lineHeight: "1.5" }}>{dash.purpose}</p>
+                  </div>
+                  <div style={{ padding: "14px 16px", display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" }}>
+                    {dash.gadgets?.map((g, gi) => <GadgetCard key={gi} g={g} />)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Saved Filters */}
+          {results.filters?.length > 0 && (
+            <div style={{ marginBottom: "32px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px", paddingBottom: "10px", borderBottom: "1px solid #e4e7ec" }}>
+                <span style={{ fontSize: "16px" }}>🔍</span>
+                <span style={{ fontSize: "13px", fontWeight: "700", color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Saved Filters</span>
+                <span style={{ fontSize: "11px", background: "#e6f1fb", color: "#185fa5", borderRadius: "4px", padding: "1px 7px", fontWeight: "600" }}>{results.filters.length}</span>
+                <span style={{ fontSize: "11px", color: "#94a3b8", marginLeft: "4px" }}>click any filter to expand</span>
+              </div>
+              {results.filters.map((item, i) => <JqlCard key={i} item={item} index={i} />)}
+            </div>
+          )}
+
+          {/* Automation Rules */}
+          {results.automation?.length > 0 && (
+            <div style={{ marginBottom: "32px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px", paddingBottom: "10px", borderBottom: "1px solid #e4e7ec" }}>
+                <span style={{ fontSize: "16px" }}>⚡</span>
+                <span style={{ fontSize: "13px", fontWeight: "700", color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Automation Rules</span>
+                <span style={{ fontSize: "11px", background: "#eeedfe", color: "#534ab7", borderRadius: "4px", padding: "1px 7px", fontWeight: "600" }}>{results.automation.length}</span>
+              </div>
+              {results.automation.map((rule, i) => <AutomationRuleCard key={i} rule={rule} index={i} />)}
+            </div>
+          )}
+
+          {/* Board Tips */}
+          {results.boardTips?.length > 0 && (
+            <div style={{ marginBottom: "32px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px", paddingBottom: "10px", borderBottom: "1px solid #e4e7ec" }}>
+                <span style={{ fontSize: "16px" }}>🗂</span>
+                <span style={{ fontSize: "13px", fontWeight: "700", color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.06em" }}>Board Configuration Tips</span>
+              </div>
+              {results.boardTips.map((tip, i) => (
+                <div key={i} style={{ display: "flex", gap: "12px", marginBottom: "10px" }}>
+                  <span style={{ fontSize: "12px", color: "#185fa5", fontFamily: "monospace", minWidth: "20px", fontWeight: "700", marginTop: "2px" }}>{i + 1}.</span>
+                  <p style={{ fontSize: "13px", color: "#475569", lineHeight: "1.6", margin: 0 }}>{tip}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
+
+const TAB_META = [
+  {
+    id: "generator",
+    label: "Test Generator",
+    tooltip: "Generate functional, edge, negative & BDD test cases from a user story",
+    icon: (color) => (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="20 6 9 17 4 12" />
+      </svg>
+    ),
+  },
+  {
+    id: "gap",
+    label: "Gap Detector",
+    tooltip: "Paste existing tests to find what's missing, weak, or redundant",
+    icon: (color) => (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+    ),
+  },
+  {
+    id: "risk",
+    label: "Risk Assessment",
+    tooltip: "Analyse impact & likelihood across 8 risk categories",
+    icon: (color) => (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+    ),
+  },
+  {
+    id: "docs",
+    label: "Documentation",
+    tooltip: "Generate test plans, feature guides & automation strategies",
+    icon: (color) => (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" />
+      </svg>
+    ),
+  },
+  {
+    id: "jira",
+    label: "Jira & JQL",
+    tooltip: "Get dashboards, saved filters & automation rules for your project",
+    icon: (color) => (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="9" y1="21" x2="9" y2="9" />
+      </svg>
+    ),
+  },
+];
+
+function Tab({ tab, active, onClick, resultCount }) {
+  const [hovered, setHovered] = useState(false);
+  const iconColor = active ? "#1558a0" : hovered ? "#1e293b" : "#64748b";
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={onClick}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          padding: "9px 16px",
+          background: active ? "#ffffff" : hovered ? "#d8dde5" : "#e2e6ec",
+          border: active ? "1px solid #d0d5dd" : "1px solid #c4cad4",
+          borderBottom: active ? "1px solid #ffffff" : "1px solid #c4cad4",
+          borderRadius: "8px 8px 0 0",
+          color: active ? "#1558a0" : hovered ? "#1e293b" : "#475569",
+          fontSize: "13px",
+          fontWeight: active ? "600" : "500",
+          cursor: "pointer",
+          transition: "all 0.15s",
+          outline: "none",
+          marginBottom: active ? "-1px" : "0",
+          position: "relative",
+          zIndex: active ? 1 : 0,
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {tab.icon(iconColor)}
+        {tab.label}
+        {resultCount > 0 && (
+          <span style={{
+            fontSize: "10px",
+            fontWeight: "700",
+            padding: "1px 6px",
+            borderRadius: "99px",
+            background: active ? "#1558a0" : "#64748b",
+            color: "#ffffff",
+            lineHeight: "16px",
+            minWidth: "18px",
+            textAlign: "center",
+          }}>
+            {resultCount}
+          </span>
+        )}
+      </button>
+
+      {/* Tooltip */}
+      {hovered && !active && (
+        <div style={{
+          position: "absolute",
+          top: "calc(100% + 10px)",
+          left: "50%",
+          transform: "translateX(-50%)",
+          background: "#1e293b",
+          color: "#f8fafc",
+          fontSize: "11px",
+          lineHeight: "1.5",
+          padding: "6px 10px",
+          borderRadius: "6px",
+          whiteSpace: "normal",
+          zIndex: 100,
+          pointerEvents: "none",
+          width: "200px",
+          textAlign: "center",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+        }}>
+          {tab.tooltip}
+          <div style={{
+            position: "absolute",
+            top: "-4px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: "8px",
+            height: "8px",
+            background: "#1e293b",
+            borderRadius: "1px",
+            rotate: "45deg",
+          }} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function QAKickstart() {
   const [activeTab, setActiveTab] = useState("generator");
+  const [tabResults, setTabResults] = useState({});
 
-  const tabs = [
-    { id: "generator", label: "Test Generator" },
-    { id: "gap", label: "Gap Detector" },
-    { id: "risk", label: "Risk Assessment" },
-    { id: "docs", label: "Documentation" },
-  ];
+  const setTabResultCount = (tabId, count) => {
+    setTabResults(prev => ({ ...prev, [tabId]: count }));
+  };
 
   return (
     <div
       style={{
         minHeight: "100vh",
-        background: "#f8fafc",
+        background: "#ebeef2",
         fontFamily: "'Segoe UI', system-ui, sans-serif",
         color: "#1e293b",
       }}
     >
-      <div
-        style={{
-          background: "#ffffff",
-          borderBottom: "1px solid #e2e8f0",
-          padding: "16px 32px",
-          display: "flex",
-          alignItems: "center",
-          gap: "14px",
-        }}
-      >
-        <div
-          style={{
-            width: "32px",
-            height: "32px",
-            borderRadius: "7px",
-            background: "#185fa5",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}
-        >
-          <svg
-            width="17"
-            height="17"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="white"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-          </svg>
-        </div>
-        <div>
-          <h1
+      {/* Header */}
+      <div style={{ background: "#ebeef2", padding: "20px 32px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
+          <div
             style={{
-              margin: 0,
-              fontSize: "15px",
-              fontWeight: "700",
-              color: "#0f172a",
+              width: "34px",
+              height: "34px",
+              borderRadius: "9px",
+              background: "#1558a0",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              boxShadow: "0 2px 6px rgba(21,88,160,0.35)",
             }}
           >
-            QA Kickstart
-          </h1>
-          <p style={{ margin: 0, fontSize: "11px", color: "#94a3b8" }}>
-            by a QA, for every QA
-          </p>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+            </svg>
+          </div>
+          <div>
+            <h1 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>QA Kickstart</h1>
+            <p style={{ margin: 0, fontSize: "11px", color: "#94a3b8" }}>by a QA, for every QA</p>
+          </div>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{ display: "flex", gap: "4px", alignItems: "flex-end", overflowX: "auto" }}>
+          {TAB_META.map((tab) => (
+            <Tab
+              key={tab.id}
+              tab={tab}
+              active={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              resultCount={tabResults[tab.id] || 0}
+            />
+          ))}
         </div>
       </div>
 
-      <div
-        style={{
-          background: "#ffffff",
-          borderBottom: "1px solid #e2e8f0",
-          padding: "0 32px",
-        }}
-      >
-        <div style={{ display: "flex" }}>
-          {tabs.map((tab) => {
-            const active = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                style={{
-                  padding: "12px 20px",
-                  background: "none",
-                  border: "none",
-                  borderBottom: `2px solid ${active ? "#185fa5" : "transparent"}`,
-                  color: active ? "#185fa5" : "#64748b",
-                  fontSize: "13px",
-                  fontWeight: active ? "600" : "500",
-                  cursor: "pointer",
-                  transition: "all 0.15s",
-                  outline: "none",
-                }}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
+      {/* Content panel */}
+      <div style={{ background: "#ffffff", borderTop: "1px solid #d0d5dd" }}>
+        <div style={{ maxWidth: "860px", margin: "0 auto", padding: "28px 24px" }}>
+          {activeTab === "generator" && <GeneratorTab onResults={(n) => setTabResultCount("generator", n)} />}
+          {activeTab === "gap" && <GapDetectorTab onResults={(n) => setTabResultCount("gap", n)} />}
+          {activeTab === "risk" && <RiskAssessmentTab onResults={(n) => setTabResultCount("risk", n)} />}
+          {activeTab === "docs" && <DocumentationTab />}
+          {activeTab === "jira" && <JiraTab />}
         </div>
       </div>
 
-      <div
-        style={{ maxWidth: "860px", margin: "0 auto", padding: "28px 24px" }}
-      >
-        {activeTab === "generator" && <GeneratorTab />}
-        {activeTab === "gap" && <GapDetectorTab />}
-        {activeTab === "risk" && <RiskAssessmentTab />}
-        {activeTab === "docs" && <DocumentationTab />}
-      </div>
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } } * { box-sizing: border-box; }`}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.75; } } * { box-sizing: border-box; }`}</style>
     </div>
   );
 }
