@@ -241,9 +241,33 @@ const MODE_ICONS = {
   ),
 };
 
+// ─── PROJECT CONTEXT ─────────────────────────────────────────────────────────
+
+const EMPTY_CONTEXT = { productName: "", domain: "", techStack: "", targetUsers: "", keyRisks: "" };
+
+function loadProjectContext() {
+  try { return JSON.parse(localStorage.getItem("qa_kickstart_project_context")) || EMPTY_CONTEXT; } catch { return EMPTY_CONTEXT; }
+}
+
+function saveProjectContext(ctx) {
+  try { localStorage.setItem("qa_kickstart_project_context", JSON.stringify(ctx)); } catch {}
+}
+
+function buildContextBlock(ctx) {
+  if (!ctx) return "";
+  const lines = [];
+  if (ctx.productName) lines.push(`Product: ${ctx.productName}`);
+  if (ctx.domain)      lines.push(`Domain: ${ctx.domain}`);
+  if (ctx.techStack)   lines.push(`Tech Stack: ${ctx.techStack}`);
+  if (ctx.targetUsers) lines.push(`Target Users: ${ctx.targetUsers}`);
+  if (ctx.keyRisks)    lines.push(`Key Risk Areas: ${ctx.keyRisks}`);
+  if (!lines.length)   return "";
+  return `PROJECT CONTEXT (use this to tailor all output to this specific product):\n${lines.join("\n")}\n\n`;
+}
+
 // ─── PROMPTS ──────────────────────────────────────────────────────────────────
 
-function buildGeneratorPrompt(mode, input, selectedTypes) {
+function buildGeneratorPrompt(mode, input, selectedTypes, ctx) {
   const typeDescriptions = selectedTypes
     .map((t) => {
       const f = TEST_TYPES.find((x) => x.id === t);
@@ -257,7 +281,7 @@ function buildGeneratorPrompt(mode, input, selectedTypes) {
   };
   return `You are an expert QA engineer. ${modeInstructions[mode]}
 
-Input:
+${buildContextBlock(ctx)}Input:
 ${input}
 
 Generate test cases for these types: ${typeDescriptions}
@@ -282,10 +306,10 @@ ANTI-REPETITION: Every test case in this response must cover a different angle, 
 Return one flat array of all test cases.`;
 }
 
-function buildGapPrompt(feature, existingTests) {
+function buildGapPrompt(feature, existingTests, ctx) {
   return `You are an expert QA engineer performing a test coverage gap analysis.
 
-Feature / User Story:
+${buildContextBlock(ctx)}Feature / User Story:
 ${feature}
 
 Existing test cases (plain titles, one per line):
@@ -307,12 +331,12 @@ The object must have:
 ANTI-REPETITION: Each missing test must cover a different gap dimension (boundary, state, permission, error, concurrency, data type). Do not list variations of the same missing scenario.`;
 }
 
-function buildRiskPrompt(description) {
+function buildRiskPrompt(description, ctx) {
   return `You are an expert QA engineer and risk analyst.
 
 Analyse this product/feature and identify ALL relevant risks: Functional, Technical, Performance, Security, Integration, UX, Data, Edge Case.
 
-Product / Feature Description:
+${buildContextBlock(ctx)}Product / Feature Description:
 ${description}
 
 Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
@@ -338,10 +362,10 @@ ANTI-REPETITION: Each risk must cover a distinct failure mode. Do not list two r
 Sort risks by testPriority ascending.`;
 }
 
-function buildTestPlanPrompt(input) {
+function buildTestPlanPrompt(input, ctx) {
   return `You are an expert QA engineer writing a formal test plan document.
 
-Feature / Epic:
+${buildContextBlock(ctx)}Feature / Epic:
 ${input}
 
 Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
@@ -362,7 +386,7 @@ CONTENT RULES — every section must be grounded in the feature description prov
 Do not pad sections with generic QA boilerplate. Every sentence must add information specific to this feature.`;
 }
 
-function buildOnboardingPrompt(input) {
+function buildOnboardingPrompt(input, ctx) {
   return `You are an expert QA engineer writing a focused product understanding guide for a new QA engineer.
 
 Your goal: help them deeply understand how this feature works and what to watch out for when testing it.
@@ -373,7 +397,7 @@ STRICT RULES:
 - Do NOT reference people, roles, or processes that are not mentioned in the input.
 - Every point must be grounded in the feature itself — what it does, how it behaves, what can break.
 
-Feature / Epic:
+${buildContextBlock(ctx)}Feature / Epic:
 ${input}
 
 Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
@@ -391,10 +415,10 @@ Include ONLY these sections:
 6. "Testing Notes" — 4-6 specific, non-obvious testing challenges for THIS feature. Each note must name a concrete scenario or state that is hard to reproduce or set up, and explain how to approach it — e.g. "To test the weekly reset behaviour, you will need to mock the UTC clock or manually trigger the cron — waiting for Monday is not viable in most test environments." Avoid generic tips like "use equivalence partitioning" or "test on multiple browsers" unless they address a specific complexity in this feature.`;
 }
 
-function buildAutomationPrompt(input) {
+function buildAutomationPrompt(input, ctx) {
   return `You are an expert QA automation strategist. Analyse this feature or test list and produce a practical automation plan.
 
-Input:
+${buildContextBlock(ctx)}Input:
 ${input}
 
 Respond ONLY with a valid JSON object. No explanation, no markdown, no backticks. Raw JSON only.
@@ -414,10 +438,10 @@ The object must have:
 ANTI-REPETITION: Each recommendation must address a distinct strategic decision. Do not rephrase the same advice in different words.`;
 }
 
-function buildJiraPrompt(description) {
+function buildJiraPrompt(description, ctx) {
   return `You are an expert Jira administrator with deep experience designing advanced dashboards, saved filters, and automation for complex software projects.
 
-The user has described their project and what they want to track or achieve in Jira:
+${buildContextBlock(ctx)}The user has described their project and what they want to track or achieve in Jira:
 
 ${description}
 
@@ -1782,7 +1806,7 @@ function GeneratorTab({ onResults }) {
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(buildGeneratorPrompt(inputMode, input, selectedTypes), 4000, (n) => setBytesReceived(n));
+      const parsed = await callClaude(buildGeneratorPrompt(inputMode, input, selectedTypes, loadProjectContext()), 4000, (n) => setBytesReceived(n));
       setResults(parsed);
       saveTab("generator", { results: parsed, selectedTypes, inputMode });
       onResults && onResults(parsed.length);
@@ -2131,7 +2155,7 @@ function GapDetectorTab({ onResults }) {
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(buildGapPrompt(feature, existingTests), 4000, (n) => setBytesReceived(n));
+      const parsed = await callClaude(buildGapPrompt(feature, existingTests, loadProjectContext()), 4000, (n) => setBytesReceived(n));
       setResults(parsed);
       saveTab("gap", { results: parsed });
       onResults && onResults((parsed.missing?.length || 0) + (parsed.weak?.length || 0));
@@ -2622,7 +2646,7 @@ function RiskAssessmentTab({ onResults }) {
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(buildRiskPrompt(description), 6000, (n) => setBytesReceived(n));
+      const parsed = await callClaude(buildRiskPrompt(description, loadProjectContext()), 6000, (n) => setBytesReceived(n));
       setResults(parsed);
       saveTab("risk", { results: parsed });
       onResults && onResults(parsed.risks?.length || 0);
@@ -2926,7 +2950,7 @@ function DocumentationTab() {
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(promptBuilders[docMode](input), 4000, (n) => setBytesReceived(n));
+      const parsed = await callClaude(promptBuilders[docMode](input, loadProjectContext()), 4000, (n) => setBytesReceived(n));
       const r = { type: docMode, data: parsed };
       setResults(r);
       saveTab("docs", { results: r });
@@ -3712,7 +3736,7 @@ function JiraTab() {
     setError(null);
     setResults(null);
     try {
-      const parsed = await callClaude(buildJiraPrompt(description), 8000, (n) => setBytesReceived(n));
+      const parsed = await callClaude(buildJiraPrompt(description, loadProjectContext()), 8000, (n) => setBytesReceived(n));
       setResults(parsed);
       saveTab("jira", { results: parsed });
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
@@ -4042,13 +4066,143 @@ function Tab({ tab, active, onClick, resultCount }) {
   );
 }
 
+// ─── SETTINGS MODAL ──────────────────────────────────────────────────────────
+
+function SettingsModal({ onClose }) {
+  const [ctx, setCtx] = useState(loadProjectContext);
+  const [saved, setSaved] = useState(false);
+
+  const field = (key, label, placeholder, rows = 1) => (
+    <div style={{ marginBottom: "16px" }}>
+      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "5px" }}>
+        {label}
+      </label>
+      {rows === 1 ? (
+        <input
+          value={ctx[key]}
+          onChange={e => setCtx(p => ({ ...p, [key]: e.target.value }))}
+          placeholder={placeholder}
+          style={{
+            width: "100%", padding: "8px 10px", border: "1px solid #dde1e7",
+            borderRadius: "7px", fontSize: "13px", color: "#1e293b",
+            background: "#fafbfc", outline: "none", boxSizing: "border-box",
+          }}
+        />
+      ) : (
+        <textarea
+          value={ctx[key]}
+          onChange={e => setCtx(p => ({ ...p, [key]: e.target.value }))}
+          placeholder={placeholder}
+          rows={rows}
+          style={{
+            width: "100%", padding: "8px 10px", border: "1px solid #dde1e7",
+            borderRadius: "7px", fontSize: "13px", color: "#1e293b",
+            background: "#fafbfc", outline: "none", resize: "vertical",
+            boxSizing: "border-box", fontFamily: "inherit", lineHeight: "1.5",
+          }}
+        />
+      )}
+    </div>
+  );
+
+  const handleSave = () => {
+    saveProjectContext(ctx);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+  };
+
+  const handleClear = () => {
+    setCtx(EMPTY_CONTEXT);
+    saveProjectContext(EMPTY_CONTEXT);
+  };
+
+  const hasContent = Object.values(ctx).some(v => v.trim().length > 0);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)",
+        zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "20px",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "#ffffff", borderRadius: "14px", width: "100%", maxWidth: "480px",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.18)", overflow: "hidden",
+        }}
+      >
+        {/* Modal header */}
+        <div style={{ padding: "20px 22px 16px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>Project Context</h2>
+            <p style={{ margin: "3px 0 0", fontSize: "12px", color: "#94a3b8" }}>
+              Saved once — applied silently to every generation
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: "4px", lineHeight: 0 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Fields */}
+        <div style={{ padding: "20px 22px" }}>
+          {field("productName", "Product Name", "e.g. Payments Portal, Mobile Banking App")}
+          {field("domain", "Domain", "e.g. Fintech, Gaming, E-commerce, Telecoms, SaaS")}
+          {field("techStack", "Tech Stack", "e.g. React Native, Node.js, PostgreSQL, AWS", 2)}
+          {field("targetUsers", "Target Users", "e.g. SME business owners, non-technical, Southeast Asia")}
+          {field("keyRisks", "Key Risk Areas", "e.g. Payments, KYC, Real-time sync, Authentication", 2)}
+
+          <p style={{ margin: "0 0 16px", fontSize: "11px", color: "#94a3b8", fontStyle: "italic" }}>
+            Leave blank any fields that don't apply. Context is optional — all tabs work without it.
+          </p>
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+            {hasContent && (
+              <button
+                onClick={handleClear}
+                style={{
+                  padding: "8px 14px", borderRadius: "7px", border: "1px solid #dde1e7",
+                  background: "#ffffff", color: "#64748b", fontSize: "13px",
+                  fontWeight: "600", cursor: "pointer",
+                }}
+              >
+                Clear
+              </button>
+            )}
+            <button
+              onClick={handleSave}
+              style={{
+                padding: "8px 20px", borderRadius: "7px", border: "none",
+                background: saved ? "#166534" : "#1558a0", color: "#ffffff",
+                fontSize: "13px", fontWeight: "600", cursor: "pointer",
+                transition: "background 0.2s",
+              }}
+            >
+              {saved ? "✓ Saved" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function QAKickstart() {
   const [activeTab, setActiveTab] = useState("generator");
   const [tabResults, setTabResults] = useState({});
+  const [showSettings, setShowSettings] = useState(false);
 
   const setTabResultCount = (tabId, count) => {
     setTabResults(prev => ({ ...prev, [tabId]: count }));
   };
+
+  const hasContext = Object.values(loadProjectContext()).some(v => v.trim().length > 0);
 
   return (
     <div
@@ -4059,6 +4213,8 @@ export default function QAKickstart() {
         color: "#1e293b",
       }}
     >
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+
       {/* Header */}
       <div style={{ background: "#ebeef2", padding: "20px 32px 0" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
@@ -4080,10 +4236,42 @@ export default function QAKickstart() {
               <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
             </svg>
           </div>
-          <div>
+          <div style={{ flex: 1 }}>
             <h1 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>QA Kickstart</h1>
             <p style={{ margin: 0, fontSize: "11px", color: "#94a3b8" }}>by a QA, for every QA</p>
           </div>
+          {/* Project Context button */}
+          <button
+            onClick={() => setShowSettings(true)}
+            style={{
+              background: hasContext ? "#e6f1fb" : "#ffffff",
+              border: `1px solid ${hasContext ? "#93c5fd" : "#dde1e7"}`,
+              borderRadius: "8px",
+              height: "34px",
+              padding: "0 12px 0 9px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              cursor: "pointer",
+              flexShrink: 0,
+              position: "relative",
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={hasContext ? "#185fa5" : "#64748b"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+            </svg>
+            <span style={{ fontSize: "12px", fontWeight: "600", color: hasContext ? "#185fa5" : "#64748b", whiteSpace: "nowrap" }}>
+              {hasContext ? "Project set" : "Set project context"}
+            </span>
+            {hasContext && (
+              <div style={{
+                position: "absolute", top: "-3px", right: "-3px",
+                width: "8px", height: "8px", borderRadius: "50%",
+                background: "#1558a0", border: "1.5px solid #ebeef2",
+              }} />
+            )}
+          </button>
         </div>
 
         {/* Tab bar */}
